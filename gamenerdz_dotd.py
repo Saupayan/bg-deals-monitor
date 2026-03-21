@@ -9,11 +9,12 @@ This script:
   2. Extracts the game name and deal price
   3. Runs the full research pipeline (BGG stats, marketplace sales,
      retail prices from other stores, community reviews)
-  4. Sends a single-deal email via emailer.send_deal_alert()
+  4. Sends a consolidated email + WhatsApp via the unified pipeline
 
 Usage:
   python gamenerdz_dotd.py            -- check right now, then schedule for 1:05pm ET every day
-  python gamenerdz_dotd.py --test     -- check right now once and exit (no scheduling)
+  python gamenerdz_dotd.py --test     -- check right now once, bypass dedup, and exit
+  python gamenerdz_dotd.py --once     -- check right now once (respects already-sent-today guard)
   python gamenerdz_dotd.py --loop     -- run in loop mode (used when integrated with main monitor)
 
 GameNerdz DotD page: https://www.gamenerdz.com/deal-of-the-day
@@ -177,7 +178,7 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
 def research_dotd(dotd: Dict) -> Optional[Dict]:
     """
     Run the full BGG research pipeline for a GameNerdz DotD item.
-    Returns a deal dict ready for emailer.send_deal_alert(), or None.
+    Returns a deal dict ready for emailer.send_consolidated_alert(), or None.
     """
     raw_name = dotd['name']
 
@@ -238,14 +239,12 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
 
     # Build the thread-like dict so emailer can use the same template
     thread = {
-        'id':      '',           # no BGG thread ID for DotD
-        'subject': f"GameNerdz Deal of the Day: {raw_name} — {dotd['price_str']}",
-        'author':  'GameNerdz',
+        'id':       '',           # no BGG thread ID for DotD
+        'deal_url': dotd['url'],  # actual GameNerdz product page
+        'subject':  f"GameNerdz Deal of the Day: {raw_name} — {dotd['price_str']}",
+        'author':   'GameNerdz',
         'post_date': '',
     }
-    # Override deal URL with the actual GameNerdz product page
-    if game_details:
-        game_details['deal_url'] = dotd['url']
 
     return dict(
         thread        = thread,
@@ -288,16 +287,9 @@ def check_gamenerdz_dotd(force: bool = False) -> None:
         return
 
     print(f"\n  Sending GameNerdz DotD alert for '{dotd['name']}'...")
-    sent = emailer.send_deal_alert(
-        thread        = deal['thread'],
-        game_details  = deal['game_details'],
-        sold_listings = deal['sold_listings'],
-        retail_prices = deal['retail_prices'],
-        reviews       = deal['reviews'],
-        tag           = "GameNerdz Deal of the Day",
-    )
+    sent = emailer.send_consolidated_alert([deal])
     print(f"  Sending WhatsApp alert...")
-    whatsapp_notifier.send_dotd_whatsapp(deal)
+    whatsapp_notifier.send_deal_whatsapp([deal])
 
     if sent and not force:
         _mark_sent_today()
@@ -309,10 +301,16 @@ def check_gamenerdz_dotd(force: bool = False) -> None:
 
 if __name__ == '__main__':
 
-    # --test: run once right now and exit
+    # --test: run once right now, bypass dedup, and exit
     if '--test' in sys.argv:
         print("\nTEST MODE — checking GameNerdz DotD right now...\n")
         check_gamenerdz_dotd(force=True)
+        sys.exit(0)
+
+    # --once: run once right now (respects already-sent-today guard) and exit
+    if '--once' in sys.argv:
+        print("\nONCE MODE — checking GameNerdz DotD (respecting dedup)...\n")
+        check_gamenerdz_dotd(force=False)
         sys.exit(0)
 
     print("""
