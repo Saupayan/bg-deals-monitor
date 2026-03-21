@@ -2,7 +2,8 @@ name: GameNerdz Deal of the Day
 
 on:
   schedule:
-    - cron: '5 18 * * *'   # 1:05 PM ET (18:05 UTC = EST; adjust to 17:05 for EDT)
+    - cron: '5 18 * * *'   # 1:05 PM ET (18:05 UTC = EST / 17:05 UTC = EDT)
+    - cron: '5 19 * * *'   # 2:05 PM ET backup (in case GitHub skips the 1pm run)
   workflow_dispatch:         # Allows manual trigger from GitHub UI
 
 jobs:
@@ -39,7 +40,7 @@ jobs:
           GREEN_API_INSTANCE_ID:  ${{ secrets.GREEN_API_INSTANCE_ID }}
           GREEN_API_TOKEN:        ${{ secrets.GREEN_API_TOKEN }}
           WHATSAPP_PHONE:         ${{ secrets.WHATSAPP_PHONE }}
-        run: python gamenerdz_dotd.py --test
+        run: python gamenerdz_dotd.py --once
 
       - name: Save DotD sent cache
         uses: actions/cache/save@v4
