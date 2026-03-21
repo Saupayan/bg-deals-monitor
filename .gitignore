@@ -1,0 +1,23 @@
+# Never commit credentials or local state
+.env
+seen_threads.json
+gamenerdz_sent.txt
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Windows junk
+Thumbs.db
+desktop.ini
+
+# Lock files (Excel open indicator)
+~$*.xlsx
