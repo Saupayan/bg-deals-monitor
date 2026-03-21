@@ -62,8 +62,8 @@ def send_consolidated_alert(deals: List[Dict]) -> bool:
         return False
 
     count = len(deals)
-    names = [d.get('game_details', {}).get('name') or d['thread']['subject'] for d in deals]
-    subject = f"🎲 {count} New BGG Deal{'s' if count > 1 else ''}: {', '.join(names[:3])}"
+    names = [(d.get('game_details') or {}).get('name') or d['thread']['subject'] for d in deals]
+    subject = f"🎲 {count} New Deal{'s' if count > 1 else ''}: {', '.join(names[:3])}"
     if count > 3:
         subject += f" +{count - 3} more"
 
@@ -81,7 +81,7 @@ def send_consolidated_alert(deals: List[Dict]) -> bool:
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:700px;margin:0 auto;padding:20px;color:#222;background:#fff">
 
 <div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 100%);border-radius:12px;padding:20px 24px;margin-bottom:28px">
-  <div style="font-size:12px;color:#aaa;margin-bottom:4px;text-transform:uppercase;letter-spacing:1px">BGG Hot Deals Monitor</div>
+  <div style="font-size:12px;color:#aaa;margin-bottom:4px;text-transform:uppercase;letter-spacing:1px">Board Game Deals Monitor</div>
   <div style="font-size:20px;color:#fff;font-weight:bold">{count} New Deal{'s' if count > 1 else ''} Found</div>
   <div style="font-size:12px;color:#888;margin-top:4px">{datetime.now().strftime('%B %d, %Y at %I:%M %p').replace(' 0', ' ')}</div>
 </div>
@@ -89,18 +89,18 @@ def send_consolidated_alert(deals: List[Dict]) -> bool:
 {divider.join(sections_html)}
 
 <div style="margin-top:32px;padding-top:16px;border-top:1px solid #eee;font-size:11px;color:#aaa;text-align:center">
-  BGG Deal Monitor · {datetime.now().strftime('%b %d, %Y at %I:%M %p').replace(' 0', ' ')}
+  Board Game Deals Monitor · {datetime.now().strftime('%b %d, %Y at %I:%M %p').replace(' 0', ' ')}
 </div>
 </body></html>"""
 
-    text_body = f"BGG HOT DEALS — {count} New Deal{'s' if count > 1 else ''}\n{'='*60}\n\n" + \
+    text_body = f"BOARD GAME DEALS — {count} New Deal{'s' if count > 1 else ''}\n{'='*60}\n\n" + \
                 "\n\n".join(sections_text)
 
     return _send(subject, html_body, text_body)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SINGLE DEAL EMAIL  (used for GameNerdz DotD and standalone alerts)
+# SINGLE DEAL EMAIL  (kept for backwards compat; prefer send_consolidated_alert)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def send_deal_alert(
@@ -109,7 +109,7 @@ def send_deal_alert(
     sold_listings: List[Dict],
     retail_prices: List[Dict],
     reviews: Dict,
-    tag: str = "BGG Deal",
+    tag: str = "New Deal",
 ) -> bool:
     deal = dict(thread=thread, game_details=game_details,
                 sold_listings=sold_listings, retail_prices=retail_prices,
@@ -122,7 +122,7 @@ def send_deal_alert(
 <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:700px;margin:0 auto;padding:20px;color:#222;background:#fff">
 {_deal_section_html(deal, 1, 1)}
 <div style="margin-top:32px;padding-top:16px;border-top:1px solid #eee;font-size:11px;color:#aaa;text-align:center">
-  BGG Deal Monitor · {datetime.now().strftime('%b %d, %Y at %I:%M %p').replace(' 0', ' ')}
+  Board Game Deals Monitor · {datetime.now().strftime('%b %d, %Y at %I:%M %p').replace(' 0', ' ')}
 </div>
 </body></html>"""
 
@@ -143,7 +143,7 @@ def _deal_section_html(deal: Dict, index: int, total: int) -> str:
 
     name         = gd.get('name', thread['subject'])
     bgg_url      = gd.get('bgg_url', 'https://boardgamegeek.com/forum/10/bgg/hot-deals')
-    deal_url     = f"https://boardgamegeek.com/thread/{thread['id']}"
+    deal_url     = thread.get('deal_url') or (f"https://boardgamegeek.com/thread/{thread['id']}" if thread.get('id') else '#')
     rating       = gd.get('average_rating', 'N/A')
     weight       = gd.get('weight', 'N/A')
     best_players = gd.get('best_players', 'Unknown')
@@ -274,7 +274,7 @@ def _deal_section_text(deal: Dict, index: int) -> str:
     name = gd.get('name', thread['subject'])
     lines = [
         f"[{index}] {name}",
-        f"Deal: https://boardgamegeek.com/thread/{thread['id']}",
+        f"Deal: {thread.get('deal_url') or (('https://boardgamegeek.com/thread/' + thread['id']) if thread.get('id') else '#')}",
         f"BGG:  {gd.get('bgg_url','')}",
         f"Rating: {gd.get('average_rating','N/A')}/10  |  Weight: {gd.get('weight','N/A')}/5  |  Best at: {gd.get('best_players','?')}p  |  Rank: {gd.get('bgg_rank','?')}",
         "",
