@@ -122,7 +122,7 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
     Fall-back chain:
       1. JSON-LD <script type="application/ld+json"> â Product or ItemList
       2. text/x-magento-init script tags (sometimes embed product config)
-      3. Visible CSS selectors (only works if URL is a product page)
+      3. Visible CSS selectors (only works if URL redirects to a product page)
       4. Any non-header h1
     """
     import json as _json
@@ -218,8 +218,8 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
         print(f"  DEBUG: page title tag = {soup.title.string if soup.title else 'N/A'}")
         print(f"  DEBUG: first 500 chars of visible text: {page_text[:500]}")
         all_h1 = [e.get_text(strip=True) for e in soup.find_all('h1')]
-        print(f"  DEBUG: all h1 tags found: {all_h2}")
-        ld_types = [_json.loads(hs.string or '{}').get('@type', '?')
+        print(f"  DEBUG: all h1 tags found: {all_h1}")
+        ld_types = [_json.loads(s.string or '{}').get('@type', '?')
                     for s in soup.find_all('script', {'type': 'application/ld+json'})
                     if s.string]
         print(f"  DEBUG: JSON-LD @type values found: {ld_types}")
@@ -348,7 +348,7 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
             print(f"  Details: '{game_details['name']}' | "
                   f"Rating: {game_details['average_rating']} | "
                   f"Weight: {game_details['weight']} | "
-                  f"Best at: {game_details['best_players']}\")
+                  f"Best at: {game_details['best_players']}p")
     else:
         print(f"  Not found on BGG. Will include with limited info.")
 
