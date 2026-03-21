@@ -22,10 +22,12 @@ First run behaviour:
 
 Usage:
   python monitor.py            -- run normally (loops forever, checks every 15 min)
-  python monitor.py --once     -- run one check then exit (used by GitHub Actions scheduled/manual)
-  python monitor.py --force    -- send ALL deals from last 24h right now, skip seen filter
-                                  (used by WhatsApp manual trigger via repository_dispatch)
-  python monitor.py --test     -- same as --force (alias for local development)
+  python monitor.py --once      -- run one check then exit (used by GitHub Actions scheduled/manual)
+  python monitor.py --force     -- send ALL deals from last 24h right now, skip seen filter
+                                   (used by WhatsApp manual trigger via repository_dispatch)
+  python monitor.py --test      -- same as --force (alias for local development)
+  python monitor.py --heartbeat -- send compact "monitor alive" WhatsApp with live deal list
+                                   (used by hourly GitHub Actions heartbeat job)
 """
 
 import json
@@ -313,10 +315,61 @@ def run_test_mode() -> None:
 
 
 # -----------------------------------------------------------------------------
+# HEARTBEAT MODE
+# -----------------------------------------------------------------------------
+
+def run_heartbeat_mode() -> None:
+    """
+    Send a compact "monitor alive" WhatsApp showing what's currently live on BGG Hot Deals.
+    No email. No seen_threads.json changes. Fast — no BGG API lookups per game.
+    Runs hourly so you can verify the monitor is healthy even on quiet days.
+    """
+    now_str = datetime.now().strftime('%H:%M')
+    print(f"\n=== HEARTBEAT @ {now_str} ===\n")
+
+    threads = bgg_api.get_forum_threads(forum_id=config.BGG_FORUM_ID, page=1)
+    if not threads:
+        msg = f"⚠️ Monitor heartbeat @ {now_str}\nCould not reach BGG — may be down or rate-limiting."
+        print("BGG unreachable — sending warning heartbeat")
+        whatsapp_notifier.send_whatsapp(msg)
+        return
+
+    recent = [
+        t for t in threads
+        if t['subject'].lower().strip() not in SKIP_SUBJECTS
+        and _is_within_hours(t['post_date'], hours=24)
+    ]
+
+    lines = [f"🟢 *Monitor alive @ {now_str}*", ""]
+
+    if not recent:
+        lines.append("No deals on BGG Hot Deals in the last 24h.")
+    else:
+        lines.append(f"Live deals right now ({len(recent)}):")
+        for t in recent:
+            game_name = extract_game_name(t['subject']) or t['subject']
+            thread_url = f"https://boardgamegeek.com/thread/{t['id']}" if t.get('id') else ''
+            lines.append(f"• {game_name}: {thread_url}")
+
+    lines.append("")
+    lines.append("_Next check in ~15 min_")
+
+    msg = "\n".join(lines)
+    print(msg)
+    whatsapp_notifier.send_whatsapp(msg)
+
+
+# -----------------------------------------------------------------------------
 # ENTRY POINT
 # -----------------------------------------------------------------------------
 
 if __name__ == '__main__':
+
+    # --heartbeat: compact "alive" WhatsApp with live deal list. No email, no seen update.
+    # Used by the hourly heartbeat GitHub Actions job.
+    if '--heartbeat' in sys.argv:
+        run_heartbeat_mode()
+        sys.exit(0)
 
     # --force: send all deals from last 24h regardless of seen state
     # Used by the WhatsApp manual trigger (repository_dispatch).
