@@ -66,43 +66,94 @@ def send_whatsapp(message: str) -> bool:
 
 def send_deal_whatsapp(deals: list) -> bool:
     """
-    Send a compact WhatsApp alert for one or more deals.
-    Keeps it short — just the key info so it reads well as a phone notification.
+    Send a full-detail WhatsApp alert for one or more BGG Hot Deals.
+
+    Each deal includes:
+      - Game stats (rating, weight, best players, BGG rank)
+      - BGG forum thread link (the actual deal post)
+      - BGG game page link
+      - Last sold prices from BGG marketplace
+      - Current retail prices across stores
+      - 1 positive + 1 negative community review snippet
     """
     if not deals:
         return False
 
     lines = []
     lines.append("🎲 *BGG Hot Deal Alert!*")
-    lines.append("")
 
     for i, deal in enumerate(deals, 1):
-        thread      = deal.get("thread", {})
-        game        = deal.get("game_details") or {}
-        prices      = deal.get("retail_prices", [])
-        subject     = thread.get("subject", "Unknown Deal")
+        thread        = deal.get("thread", {})
+        game          = deal.get("game_details") or {}
+        sold_listings = deal.get("sold_listings", [])
+        retail_prices = deal.get("retail_prices", [])
+        reviews       = deal.get("reviews", {})
+        subject       = thread.get("subject", "Unknown Deal")
+        thread_id     = thread.get("id", "")
 
-        name        = game.get("name") or subject
-        rating      = game.get("average_rating", "N/A")
-        weight      = game.get("weight", "N/A")
-        best_at     = game.get("best_players", "N/A")
-        bgg_url     = game.get("bgg_url", "")
+        name      = game.get("name") or subject
+        rating    = game.get("average_rating", "N/A")
+        weight    = game.get("weight", "N/A")
+        best_at   = game.get("best_players", "N/A")
+        bgg_rank  = game.get("bgg_rank", "")
+        bgg_url   = game.get("bgg_url", "")
+        thread_url = f"https://boardgamegeek.com/thread/{thread_id}" if thread_id else ""
 
-        # Cheapest retail price
-        price_str = ""
-        if prices:
-            cheapest = prices[0]
-            price_str = f"💰 {cheapest['store']}: {cheapest['price_str']}"
-
+        lines.append("")
         lines.append(f"*{i}. {name}*")
-        lines.append(f"⭐ {rating}/10  |  🧠 Weight: {weight}/5  |  👥 Best: {best_at}p")
-        if price_str:
-            lines.append(price_str)
+
+        # Stats row
+        rank_str = f"  |  🏆 {bgg_rank}" if bgg_rank and bgg_rank != "Not ranked" else ""
+        lines.append(f"⭐ {rating}/10  |  🧠 Weight: {weight}/5  |  👥 Best: {best_at}p{rank_str}")
+
+        # Deal thread link (the actual forum post)
+        num_replies = thread.get("num_articles", "")
+        reply_str = f" ({num_replies} replies)" if num_replies and num_replies != "0" else ""
+        lines.append(f"📋 _{subject}{reply_str}_")
+        if thread_url:
+            lines.append(f"🔗 {thread_url}")
+
+        # BGG game page
         if bgg_url:
-            lines.append(f"🔗 {bgg_url}")
-        lines.append(f"📋 {subject}")
+            lines.append(f"📊 {bgg_url}")
+
+        # Last sold prices from BGG marketplace (up to 3)
+        if sold_listings:
+            lines.append("")
+            lines.append("🏷️ *Last sold (BGG marketplace):*")
+            for s in sold_listings[:3]:
+                lines.append(f"  {s['price']} — {s['condition']} ({s['date_sold']})")
+        else:
+            lines.append("🏷️ No recent BGG marketplace sales found")
+
+        # Retail prices (up to 5 stores)
+        if retail_prices:
+            lines.append("")
+            lines.append("💰 *Retail prices:*")
+            for p in retail_prices[:5]:
+                lines.append(f"  {p['store']}: {p['price_str']}")
+        else:
+            lines.append("💰 No retail prices found")
+
+        # Community reviews — 1 positive, 1 negative
+        pos = (reviews.get("positive") or [])
+        neg = (reviews.get("negative") or [])
+
+        lines.append("")
+        if pos:
+            r = pos[0]
+            rating_tag = f" ({r['rating']:.1f})" if r.get("rating") else ""
+            snippet = r["text"][:150].rstrip() + ("…" if len(r["text"]) > 150 else "")
+            lines.append(f"👍 \"{snippet}\" — {r['user']}{rating_tag}")
+        if neg:
+            r = neg[0]
+            rating_tag = f" ({r['rating']:.1f})" if r.get("rating") else ""
+            snippet = r["text"][:150].rstrip() + ("…" if len(r["text"]) > 150 else "")
+            lines.append(f"👎 \"{snippet}\" — {r['user']}{rating_tag}")
+
         if i < len(deals):
             lines.append("")
+            lines.append("─────────────────────")
 
     message = "\n".join(lines)
     return send_whatsapp(message)
