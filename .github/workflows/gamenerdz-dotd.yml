@@ -1,0 +1,55 @@
+name: GameNerdz Deal of the Day
+
+on:
+  schedule:
+    - cron: '5 18 * * *'   # 6:05 PM UTC = 2:05 PM EDT (summer) / 1:05 PM EST (winter)
+  workflow_dispatch:        # Manual trigger from GitHub Actions UI
+
+jobs:
+  check-dotd:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Restore state so we don't re-send if this workflow fires twice in a day
+      - name: Restore DotD sent state
+        uses: actions/cache/restore@v4
+        with:
+          path: gamenerdz_sent.txt
+          key: gamenerdz-sent-latest
+          restore-keys: |
+            gamenerdz-sent-
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      # Playwright headless Chromium is required to render the JS-heavy DotD page.
+      # --with-deps installs both the Chromium binary and required system libraries.
+      - name: Install Playwright Chromium
+        run: playwright install chromium --with-deps
+
+      - name: Run GameNerdz DotD checker
+        env:
+          BGG_API_TOKEN:          ${{ secrets.BGG_API_TOKEN }}
+          ALERT_EMAIL:            ${{ secrets.ALERT_EMAIL }}
+          GMAIL_USER:             ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD:     ${{ secrets.GMAIL_APP_PASSWORD }}
+          GREEN_API_INSTANCE_ID:  ${{ secrets.GREEN_API_INSTANCE_ID }}
+          GREEN_API_TOKEN:        ${{ secrets.GREEN_API_TOKEN }}
+          WHATSAPP_PHONE:         ${{ secrets.WHATSAPP_PHONE }}
+        run: python gamenerdz_dotd.py --test
+
+      # Save state so a manual re-run or DST-adjusted cron doesn't double-send
+      - name: Save DotD sent state
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: gamenerdz_sent.txt
+          key: gamenerdz-sent-latest
