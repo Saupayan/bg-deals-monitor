@@ -51,7 +51,7 @@ import gamenerdz_dotd
 from game_parser import extract_game_name, is_active_deal
 
 
-# Pinned/sticky posts that are NOT real deals — always skip these
+# Pinned/sticky posts that are NOT real deals â always skip these
 SKIP_SUBJECTS = {
     'what is a hot deal?',
 }
@@ -244,7 +244,7 @@ def check_for_new_deals(first_run: bool = False) -> None:
     # check_gamenerdz_dotd(force=False) has its own dedup guard (gamenerdz_sent.txt)
     # so it only sends once per calendar day regardless of how often this runs.
     try:
-        gamenerdz_dotd.check_gamenerdz_dotd(force=False)
+        gamenerdz_dotd.check_gamenerdz_dotd(force=False, use_playwright=False)
     except Exception as e:
         print(f"\n  GameNerdz DotD check error: {e}")
         traceback.print_exc()
@@ -284,7 +284,7 @@ def run_test_mode() -> None:
     Used by both --test (local dev) and --force (WhatsApp manual trigger).
     """
     mode = "FORCE / MANUAL TRIGGER" if '--force' in sys.argv else "TEST"
-    print(f"\n=== {mode} — sending all deals from the last 24 hours ===\n")
+    print(f"\n=== {mode} â sending all deals from the last 24 hours ===\n")
 
     threads = bgg_api.get_forum_threads(forum_id=config.BGG_FORUM_ID, page=1)
     if not threads:
@@ -319,7 +319,7 @@ def run_test_mode() -> None:
     # Also check GameNerdz Deal of the Day (force=True bypasses dedup)
     print("\n--- Checking GameNerdz Deal of the Day ---")
     try:
-        dotd = gamenerdz_dotd.fetch_dotd()
+        dotd = gamenerdz_dotd.fetch_dotd(use_playwright=False)
         if dotd:
             dotd_deal = gamenerdz_dotd.research_dotd(dotd)
             if dotd_deal:
@@ -356,8 +356,8 @@ def run_heartbeat_mode() -> None:
 
     threads = bgg_api.get_forum_threads(forum_id=config.BGG_FORUM_ID, page=1)
     if not threads:
-        msg = f"⚠️ Monitor heartbeat @ {now_str}\nCould not reach BGG — may be down or rate-limiting."
-        print("BGG unreachable — sending warning heartbeat")
+        msg = f"â ï¸ Monitor heartbeat @ {now_str}\nCould not reach BGG â may be down or rate-limiting."
+        print("BGG unreachable â sending warning heartbeat")
         whatsapp_notifier.send_whatsapp(msg)
         return
 
@@ -367,7 +367,7 @@ def run_heartbeat_mode() -> None:
         and _is_within_hours(t['post_date'], hours=24)
     ]
 
-    lines = [f"🟢 *Monitor alive @ {now_str}*", ""]
+    lines = [f"ð¢ *Monitor alive @ {now_str}*", ""]
 
     if not recent:
         lines.append("No deals on BGG Hot Deals in the last 24h.")
@@ -376,7 +376,7 @@ def run_heartbeat_mode() -> None:
         for t in recent:
             game_name = extract_game_name(t['subject']) or t['subject']
             thread_url = f"https://boardgamegeek.com/thread/{t['id']}" if t.get('id') else ''
-            lines.append(f"• {game_name}: {thread_url}")
+            lines.append(f"â¢ {game_name}: {thread_url}")
 
     # Also show today's GameNerdz DotD if available
     try:
@@ -384,7 +384,7 @@ def run_heartbeat_mode() -> None:
         if dotd:
             lines.append("")
             lines.append(f"*GameNerdz Deal of the Day:*")
-            lines.append(f"• {dotd['name']} — {dotd['price_str']}: {dotd['url']}")
+            lines.append(f"â¢ {dotd['name']} â {dotd['price_str']}: {dotd['url']}")
     except Exception:
         pass  # Heartbeat should never crash on GameNerdz errors
 
@@ -410,14 +410,14 @@ if __name__ == '__main__':
 
     # --force: send all deals from last 24h regardless of seen state
     # Used by the WhatsApp manual trigger (repository_dispatch).
-    # Does NOT update seen_threads.json — scheduled runs continue unaffected.
+    # Does NOT update seen_threads.json â scheduled runs continue unaffected.
     if '--force' in sys.argv or '--test' in sys.argv:
         run_test_mode()
         sys.exit(0)
 
     # --once: single check and exit (for GitHub Actions / cron jobs)
     if '--once' in sys.argv:
-        print("=== Deal Monitor — single check ===")
+        print("=== Deal Monitor â single check ===")
         is_first_run = not config.SEEN_THREADS_FILE.exists()
         check_for_new_deals(first_run=is_first_run)
         print("=== Done ===")
