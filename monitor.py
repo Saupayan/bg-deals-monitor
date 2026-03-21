@@ -22,8 +22,10 @@ First run behaviour:
 
 Usage:
   python monitor.py            -- run normally (loops forever, checks every 15 min)
-  python monitor.py --once     -- run one check then exit (used by GitHub Actions)
-  python monitor.py --test     -- process all deals from the last 24 hours right now
+  python monitor.py --once     -- run one check then exit (used by GitHub Actions scheduled/manual)
+  python monitor.py --force    -- send ALL deals from last 24h right now, skip seen filter
+                                  (used by WhatsApp manual trigger via repository_dispatch)
+  python monitor.py --test     -- same as --force (alias for local development)
 """
 
 import json
@@ -263,8 +265,10 @@ def run_test_mode() -> None:
     """
     Process all deals posted in the last 24 hours right now.
     Does NOT update seen_threads.json, so you can re-run it freely.
+    Used by both --test (local dev) and --force (WhatsApp manual trigger).
     """
-    print("\nTEST MODE -- processing all deals from the last 24 hours...\n")
+    mode = "FORCE / MANUAL TRIGGER" if '--force' in sys.argv else "TEST"
+    print(f"\n=== {mode} — sending all deals from the last 24 hours ===\n")
 
     threads = bgg_api.get_forum_threads(forum_id=config.BGG_FORUM_ID, page=1)
     if not threads:
@@ -314,7 +318,10 @@ def run_test_mode() -> None:
 
 if __name__ == '__main__':
 
-    if '--test' in sys.argv:
+    # --force: send all deals from last 24h regardless of seen state
+    # Used by the WhatsApp manual trigger (repository_dispatch).
+    # Does NOT update seen_threads.json — scheduled runs continue unaffected.
+    if '--force' in sys.argv or '--test' in sys.argv:
         run_test_mode()
         sys.exit(0)
 
