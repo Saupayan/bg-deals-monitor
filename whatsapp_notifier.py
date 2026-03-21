@@ -16,9 +16,9 @@ import requests
 import traceback
 import config
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # GREEN API ENDPOINT
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # Format: https://7107.api.greenapi.com/waInstance{id}/sendMessage/{token}
 _BASE_URL = "https://7107.api.greenapi.com"
 
@@ -33,7 +33,7 @@ def send_whatsapp(message: str) -> bool:
     phone       = config.WHATSAPP_PHONE
 
     if not all([instance_id, token, phone]):
-        print("  WhatsApp: missing GREEN_API credentials — skipping")
+        print("  WhatsApp: missing GREEN_API credentials â skipping")
         return False
 
     # Green API chat ID format: phonenumber@c.us
@@ -50,16 +50,16 @@ def send_whatsapp(message: str) -> bool:
         if resp.status_code == 200:
             data = resp.json()
             if data.get("idMessage"):
-                print(f"  WhatsApp sent ✓ (id: {data['idMessage']})")
+                print(f"  WhatsApp sent â (id: {data['idMessage']})")
                 return True
             else:
                 print(f"  WhatsApp: unexpected response: {data}")
                 return False
         else:
-            print(f"  WhatsApp: HTTP {resp.status_code} — {resp.text[:200]}")
+            print(f"  WhatsApp: HTTP {resp.status_code} â {resp.text[:200]}")
             return False
     except Exception as e:
-        print(f"  WhatsApp: error — {e}")
+        print(f"  WhatsApp: error â {e}")
         traceback.print_exc()
         return False
 
@@ -80,7 +80,7 @@ def send_deal_whatsapp(deals: list) -> bool:
         return False
 
     lines = []
-    lines.append("🎲 *BGG Hot Deal Alert!*")
+    lines.append("ð² *BGG Hot Deal Alert!*")
 
     for i, deal in enumerate(deals, 1):
         thread        = deal.get("thread", {})
@@ -103,39 +103,39 @@ def send_deal_whatsapp(deals: list) -> bool:
         lines.append(f"*{i}. {name}*")
 
         # Stats row
-        rank_str = f"  |  🏆 {bgg_rank}" if bgg_rank and bgg_rank != "Not ranked" else ""
-        lines.append(f"⭐ {rating}/10  |  🧠 Weight: {weight}/5  |  👥 Best: {best_at}p{rank_str}")
+        rank_str = f"  |  ð {bgg_rank}" if bgg_rank and bgg_rank != "Not ranked" else ""
+        lines.append(f"â­ {rating}/10  |  ð§  Weight: {weight}/5  |  ð¥ Best: {best_at}p{rank_str}")
 
         # Deal thread link (the actual forum post)
         num_replies = thread.get("num_articles", "")
         reply_str = f" ({num_replies} replies)" if num_replies and num_replies != "0" else ""
-        lines.append(f"📋 _{subject}{reply_str}_")
+        lines.append(f"ð _{subject}{reply_str}_")
         if thread_url:
-            lines.append(f"🔗 {thread_url}")
+            lines.append(f"ð {thread_url}")
 
         # BGG game page
         if bgg_url:
-            lines.append(f"📊 {bgg_url}")
+            lines.append(f"ð {bgg_url}")
 
         # Last sold prices from BGG marketplace (up to 3)
         if sold_listings:
             lines.append("")
-            lines.append("🏷️ *Last sold (BGG marketplace):*")
+            lines.append("ð·ï¸ *Last sold (BGG marketplace):*")
             for s in sold_listings[:3]:
-                lines.append(f"  {s['price']} — {s['condition']} ({s['date_sold']})")
+                lines.append(f"  {s['price']} â {s['condition']} ({s['date_sold']})")
         else:
-            lines.append("🏷️ No recent BGG marketplace sales found")
+            lines.append("ð·ï¸ No recent BGG marketplace sales found")
 
         # Retail prices (up to 5 stores)
         if retail_prices:
             lines.append("")
-            lines.append("💰 *Retail prices:*")
+            lines.append("ð° *Retail prices:*")
             for p in retail_prices[:5]:
                 lines.append(f"  {p['store']}: {p['price_str']}")
         else:
-            lines.append("💰 No retail prices found")
+            lines.append("ð° No retail prices found")
 
-        # Community reviews — 1 positive, 1 negative
+        # Community reviews â 1 positive, 1 negative
         pos = (reviews.get("positive") or [])
         neg = (reviews.get("negative") or [])
 
@@ -143,17 +143,17 @@ def send_deal_whatsapp(deals: list) -> bool:
         if pos:
             r = pos[0]
             rating_tag = f" ({r['rating']:.1f})" if r.get("rating") else ""
-            snippet = r["text"][:150].rstrip() + ("…" if len(r["text"]) > 150 else "")
-            lines.append(f"👍 \"{snippet}\" — {r['user']}{rating_tag}")
+            snippet = r["text"][:150].rstrip() + ("â¦" if len(r["text"]) > 150 else "")
+            lines.append(f"ð \"{snippet}\" â {r['user']}{rating_tag}")
         if neg:
             r = neg[0]
             rating_tag = f" ({r['rating']:.1f})" if r.get("rating") else ""
-            snippet = r["text"][:150].rstrip() + ("…" if len(r["text"]) > 150 else "")
-            lines.append(f"👎 \"{snippet}\" — {r['user']}{rating_tag}")
+            snippet = r["text"][:150].rstrip() + ("â¦" if len(r["text"]) > 150 else "")
+            lines.append(f"ð \"{snippet}\" â {r['user']}{rating_tag}")
 
         if i < len(deals):
             lines.append("")
-            lines.append("─────────────────────")
+            lines.append("âââââââââââââââââââââ")
 
     message = "\n".join(lines)
     return send_whatsapp(message)
@@ -178,17 +178,101 @@ def send_dotd_whatsapp(deal: dict) -> bool:
     dotd_url   = deal.get("dotd_url", "")
 
     lines = [
-        "🏪 *GameNerdz Deal of the Day!*",
+        "ðª *GameNerdz Deal of the Day!*",
         "",
         f"*{name}*",
-        f"⭐ {rating}/10  |  🧠 Weight: {weight}/5  |  👥 Best: {best_at}p",
+        f"â­ {rating}/10  |  ð§  Weight: {weight}/5  |  ð¥ Best: {best_at}p",
     ]
     if dotd_price:
-        lines.append(f"💰 GameNerdz: {dotd_price}")
+        lines.append(f"ð° GameNerdz: {dotd_price}")
     if dotd_url:
-        lines.append(f"🔗 {dotd_url}")
+        lines.append(f"ð {dotd_url}")
     if bgg_url:
-        lines.append(f"📊 BGG: {bgg_url}")
+        lines.append(f"ð BGG: {bgg_url}")
 
     message = "\n".join(lines)
     return send_whatsapp(message)
+
+
+def send_image_whatsapp(image_source: str, caption: str = "") -> bool:
+    """
+    Send an image via WhatsApp using Green API.
+
+    image_source:
+      - A URL (starts with http/https) â uses sendFileByUrl (no upload needed)
+      - A local file path               â uses sendFileByUpload (multipart POST)
+
+    caption: optional text shown below the image in WhatsApp.
+    Returns True if sent successfully, False otherwise.
+
+    Green API docs:
+      sendFileByUrl:    https://green-api.com/en/docs/api/sending/SendFileByUrl/
+      sendFileByUpload: https://green-api.com/en/docs/api/sending/SendFileByUpload/
+    """
+    import os
+
+    instance_id = config.GREEN_API_INSTANCE_ID
+    token       = config.GREEN_API_TOKEN
+    phone       = config.WHATSAPP_PHONE
+
+    if not all([instance_id, token, phone]):
+        print("  WhatsApp: missing GREEN_API credentials â skipping image send")
+        return False
+
+    chat_id = f"{phone}@c.us"
+
+    # ââ URL-based image (e.g. thum.io screenshot, product image URL) ââââââââââ
+    if image_source.startswith('http://') or image_source.startswith('https://'):
+        url = f"{_BASE_URL}/waInstance{instance_id}/sendFileByUrl/{token}"
+        payload = {
+            "chatId":   chat_id,
+            "urlFile":  image_source,
+            "fileName": "gn_dotd.png",
+            "caption":  caption,
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+                if data.get("idMessage"):
+                    print(f"  WhatsApp image (URL) sent â (id: {data['idMessage']})")
+                    return True
+                else:
+                    print(f"  WhatsApp image: unexpected response: {data}")
+                    return False
+            else:
+                print(f"  WhatsApp image: HTTP {resp.status_code} â {resp.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"  WhatsApp image: error â {e}")
+            traceback.print_exc()
+            return False
+
+    # ââ Local file (e.g. Playwright screenshot at /tmp/gn_dotd.png) ââââââââââ
+    else:
+        if not os.path.exists(image_source):
+            print(f"  WhatsApp image: file not found: {image_source}")
+            return False
+
+        url = f"{_BASE_URL}/waInstance{instance_id}/sendFileByUpload/{token}"
+        try:
+            with open(image_source, 'rb') as f:
+                files = {'file': (os.path.basename(image_source), f, 'image/png')}
+                data  = {'chatId': chat_id, 'caption': caption}
+                resp  = requests.post(url, data=data, files=files, timeout=60)
+
+            if resp.status_code == 200:
+                result = resp.json()
+                if result.get("idMessage"):
+                    print(f"  WhatsApp image (upload) sent â (id: {result['idMessage']})")
+                    return True
+                else:
+                    print(f"  WhatsApp image: unexpected response: {result}")
+                    return False
+            else:
+                print(f"  WhatsApp image: HTTP {resp.status_code} â {resp.text[:200]}")
+                return False
+        except Exception as e:
+            print(f"  WhatsApp image: error â {e}")
+            traceback.print_exc()
+            return False
