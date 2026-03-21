@@ -41,6 +41,7 @@ import bgg_api
 import marketplace
 import price_checker
 import emailer
+import whatsapp_notifier
 from game_parser import extract_game_name, is_active_deal
 
 
@@ -249,6 +250,8 @@ def check_for_new_deals(first_run: bool = False) -> None:
     if deals:
         print(f"\n  Sending consolidated email for {len(deals)} deal(s)...")
         emailer.send_consolidated_alert(deals)
+        print(f"  Sending WhatsApp alert...")
+        whatsapp_notifier.send_deal_whatsapp(deals)
 
 
 # -----------------------------------------------------------------------------
@@ -298,6 +301,8 @@ def run_test_mode() -> None:
     if deals:
         print(f"\n  Sending consolidated email for {len(deals)} deal(s)...")
         emailer.send_consolidated_alert(deals)
+        print(f"  Sending WhatsApp alert...")
+        whatsapp_notifier.send_deal_whatsapp(deals)
 
     print(f"\nTest complete. Processed {len(deals)} deal(s).")
 

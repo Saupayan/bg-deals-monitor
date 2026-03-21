@@ -18,5 +18,10 @@ GMAIL_APP_PASSWORD   = os.getenv('GMAIL_APP_PASSWORD', '') # Gmail App Password 
 # --- Monitoring ---
 CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', '15'))
 
+# --- WhatsApp (Green API) ---
+GREEN_API_INSTANCE_ID = os.getenv('GREEN_API_INSTANCE_ID', '')
+GREEN_API_TOKEN       = os.getenv('GREEN_API_TOKEN', '')
+WHATSAPP_PHONE        = os.getenv('WHATSAPP_PHONE', '')   # recipient phone, country code + number, no + or spaces
+
 # --- File Paths ---
 SEEN_THREADS_FILE    = BASE_DIR / 'seen_threads.json'     # tracks threads we've already processed

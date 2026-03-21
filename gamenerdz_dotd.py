@@ -34,6 +34,7 @@ import schedule
 import config
 import bgg_api
 import emailer
+import whatsapp_notifier
 import marketplace
 import price_checker
 from game_parser import extract_game_name
@@ -295,6 +296,8 @@ def check_gamenerdz_dotd(force: bool = False) -> None:
         reviews       = deal['reviews'],
         tag           = "GameNerdz Deal of the Day",
     )
+    print(f"  Sending WhatsApp alert...")
+    whatsapp_notifier.send_dotd_whatsapp(deal)
 
     if sent and not force:
         _mark_sent_today()
