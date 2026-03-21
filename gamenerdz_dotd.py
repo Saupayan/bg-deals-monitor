@@ -9,12 +9,11 @@ This script:
   2. Extracts the game name and deal price
   3. Runs the full research pipeline (BGG stats, marketplace sales,
      retail prices from other stores, community reviews)
-  4. Sends a consolidated email + WhatsApp via the unified pipeline
+  4. Sends a single-deal email via emailer.send_deal_alert()
 
 Usage:
   python gamenerdz_dotd.py            -- check right now, then schedule for 1:05pm ET every day
-  python gamenerdz_dotd.py --test     -- check right now once, bypass dedup, and exit
-  python gamenerdz_dotd.py --once     -- check right now once (respects already-sent-today guard)
+  python gamenerdz_dotd.py --test     -- check right now once and exit (no scheduling)
   python gamenerdz_dotd.py --loop     -- run in loop mode (used when integrated with main monitor)
 
 GameNerdz DotD page: https://www.gamenerdz.com/deal-of-the-day
@@ -41,9 +40,9 @@ import price_checker
 from game_parser import extract_game_name
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # CONSTANTS
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 GAMENERDZ_DOTD_URL = "https://www.gamenerdz.com/deal-of-the-day"
 
@@ -59,9 +58,9 @@ HEADERS = {
 SENT_TODAY_FILE = Path(__file__).parent / "gamenerdz_sent.txt"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # ALREADY-SENT STATE
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def _already_sent_today() -> bool:
     """Return True if we already sent a DotD alert today."""
@@ -76,9 +75,9 @@ def _mark_sent_today() -> None:
     SENT_TODAY_FILE.write_text(str(date.today()))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # SCRAPE GAMENERDZ DotD
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def fetch_dotd() -> Optional[Dict]:
     """
@@ -101,7 +100,7 @@ def fetch_dotd() -> Optional[Dict]:
         if deal:
             return deal
 
-        print("  Could not parse DotD — page structure may have changed.")
+        print("  Could not parse DotD â page structure may have changed.")
         return None
 
     except Exception as e:
@@ -113,30 +112,65 @@ def fetch_dotd() -> Optional[Dict]:
 def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
     """
     Try multiple HTML patterns to extract the DotD product name and price.
-    GameNerdz uses Magento; their product pages have consistent patterns.
+    GameNerdz uses Magento; their DotD URL is a category page listing one
+    product, so the product name is in a listing element, not a bare h1.
     """
 
-    # Pattern 1: <h1 class="page-title"> or <span itemprop="name">
     name = None
-    for selector in [
-        ('h1', {'class': 'page-title'}),
-        ('span', {'itemprop': 'name'}),
-        ('h1', {'class': 'product-name'}),
-        ('h1', {}),
+
+    # Strategy A: category/listing page â the DotD URL shows one product in a
+    # product grid.  Magento listing pages put the name in these elements.
+    for css in [
+        'a.product-item-link',
+        'strong.product-item-name',
+        '.product-item-name a',
+        '.product-item-name',
+        '.product-name a',
+        '.product-name',
+        '[data-ui-id="page-title-wrapper"]',
+        '.product-info-main h1',
     ]:
-        tag, attrs = selector
-        elem = soup.find(tag, attrs)
-        if elem and elem.get_text(strip=True):
+        elem = soup.select_one(css)
+        if elem:
             candidate = elem.get_text(strip=True)
-            # Sanity check: reject very short strings or nav-like text
+            if len(candidate) > 5 and 'deal of the day' not in candidate.lower():
+                name = candidate
+                break
+
+    # Strategy B: product detail page selectors (if URL redirects to a product)
+    if not name:
+        for selector in [
+            ('h1', {'class': 'page-title'}),
+            ('span', {'itemprop': 'name'}),
+            ('h1', {'class': 'product-name'}),
+        ]:
+            tag, attrs = selector
+            elem = soup.find(tag, attrs)
+            if elem:
+                candidate = elem.get_text(strip=True)
+                if len(candidate) > 5 and 'deal of the day' not in candidate.lower():
+                    name = candidate
+                    break
+
+    # Strategy C: any h1 that isn't the page category header
+    if not name:
+        for elem in soup.find_all('h1'):
+            candidate = elem.get_text(strip=True)
             if len(candidate) > 5 and 'deal of the day' not in candidate.lower():
                 name = candidate
                 break
 
     if not name:
+        # Debug dump so we can diagnose future failures
+        page_text = soup.get_text(separator=' ', strip=True)
+        print(f"  DEBUG: page title tag = {soup.title.string if soup.title else 'N/A'}")
+        print(f"  DEBUG: first 500 chars of visible text: {page_text[:500]}")
+        all_h1 = [e.get_text(strip=True) for e in soup.find_all('h1')]
+        print(f"  DEBUG: all h1 tags found: {all_h1}")
         return None
 
-    # Pattern 2: price — look for <span class="price"> or meta[itemprop="price"]
+    # Price â try meta tag first (works on both listing and product pages),
+    # then fall back to visible span elements.
     price_str = 'N/A'
     price_elem = soup.find('meta', {'itemprop': 'price'})
     if price_elem and price_elem.get('content'):
@@ -146,15 +180,31 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
             pass
 
     if price_str == 'N/A':
-        for cls in ['price', 'product-price', 'special-price']:
-            pe = soup.find('span', {'class': cls})
+        for css in [
+            'span.special-price span.price',
+            'span.price-wrapper span.price',
+            'span.price',
+            '.product-price .price',
+            '.special-price',
+            '.price',
+        ]:
+            pe = soup.select_one(css)
             if pe:
-                price_str = pe.get_text(strip=True)
-                break
+                candidate = pe.get_text(strip=True)
+                if '$' in candidate or candidate.replace('.','').isdigit():
+                    price_str = candidate
+                    break
 
-    # Product URL: canonical link or current URL
-    canonical = soup.find('link', {'rel': 'canonical'})
-    product_url = canonical['href'] if canonical else page_url
+    # Product URL: prefer the listing link href (direct product page),
+    # then canonical tag, then fall back to the DotD page URL itself.
+    product_url = page_url
+    listing_link = soup.select_one('a.product-item-link')
+    if listing_link and listing_link.get('href'):
+        product_url = listing_link['href']
+    else:
+        canonical = soup.find('link', {'rel': 'canonical'})
+        if canonical and canonical.get('href'):
+            product_url = canonical['href']
 
     # Image
     image_url = ''
@@ -171,14 +221,14 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # FULL RESEARCH PIPELINE
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def research_dotd(dotd: Dict) -> Optional[Dict]:
     """
     Run the full BGG research pipeline for a GameNerdz DotD item.
-    Returns a deal dict ready for emailer.send_consolidated_alert(), or None.
+    Returns a deal dict ready for emailer.send_deal_alert(), or None.
     """
     raw_name = dotd['name']
 
@@ -241,7 +291,7 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     thread = {
         'id':       '',           # no BGG thread ID for DotD
         'deal_url': dotd['url'],  # actual GameNerdz product page
-        'subject':  f"GameNerdz Deal of the Day: {raw_name} — {dotd['price_str']}",
+        'subject':  f"GameNerdz Deal of the Day: {raw_name} â {dotd['price_str']}",
         'author':   'GameNerdz',
         'post_date': '',
     }
@@ -257,9 +307,9 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # MAIN CHECK FUNCTION
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def check_gamenerdz_dotd(force: bool = False) -> None:
     """
@@ -278,7 +328,7 @@ def check_gamenerdz_dotd(force: bool = False) -> None:
 
     dotd = fetch_dotd()
     if not dotd:
-        print("  No DotD found — may not be posted yet or page changed.")
+        print("  No DotD found â may not be posted yet or page changed.")
         return
 
     deal = research_dotd(dotd)
@@ -295,27 +345,27 @@ def check_gamenerdz_dotd(force: bool = False) -> None:
         _mark_sent_today()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 if __name__ == '__main__':
 
     # --test: run once right now, bypass dedup, and exit
     if '--test' in sys.argv:
-        print("\nTEST MODE — checking GameNerdz DotD right now...\n")
+        print("\nTEST MODE â checking GameNerdz DotD right now...\n")
         check_gamenerdz_dotd(force=True)
         sys.exit(0)
 
     # --once: run once right now (respects already-sent-today guard) and exit
     if '--once' in sys.argv:
-        print("\nONCE MODE — checking GameNerdz DotD (respecting dedup)...\n")
+        print("\nONCE MODE â checking GameNerdz DotD (respecting dedup)...\n")
         check_gamenerdz_dotd(force=False)
         sys.exit(0)
 
     print("""
 +----------------------------------------------------------+
-|       GameNerdz Deal of the Day Monitor — Starting      |
+|       GameNerdz Deal of the Day Monitor â Starting      |
 +----------------------------------------------------------+
 """)
     print("  Will check at 1:05 PM ET every day.")
