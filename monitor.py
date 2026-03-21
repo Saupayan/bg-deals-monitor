@@ -187,12 +187,14 @@ def research_thread(thread: dict) -> Optional[Dict]:
 
 
 # -----------------------------------------------------------------------------
-# MAIN CHECK
+# MAIN CHECK  (handles BGG + GameNerdz DotD every run)
 # -----------------------------------------------------------------------------
 
 def check_for_new_deals(first_run: bool = False) -> None:
     """
     Fetch the latest Hot Deals threads and process any new ones.
+    Also checks GameNerdz Deal of the Day on every run (dedup guard prevents
+    double-sends within the same calendar day).
 
     first_run=True: process threads posted in the last 24 hours,
                     mark everything else as seen.
@@ -200,45 +202,56 @@ def check_for_new_deals(first_run: bool = False) -> None:
     """
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     print(f"\n{'='*60}")
-    print(f"  BGG Deal Monitor check @ {now_str}")
+    print(f"  Deal Monitor check @ {now_str}")
     print(f"{'='*60}")
 
     print("  Fetching BGG Hot Deals forum...")
     threads = bgg_api.get_forum_threads(forum_id=config.BGG_FORUM_ID, page=1)
     if not threads:
         print("  No threads returned -- BGG may be down or rate-limiting us.")
-        return
-
-    print(f"  Got {len(threads)} threads from BGG.")
-
-    seen = load_seen_threads()
-
-    # Filter out pinned/sticky non-deal posts
-    real_threads = [t for t in threads
-                    if t['subject'].lower().strip() not in SKIP_SUBJECTS]
-
-    if first_run:
-        recent = [t for t in real_threads if _is_within_hours(t['post_date'], hours=24)]
-        older  = [t for t in real_threads if not _is_within_hours(t['post_date'], hours=24)]
-        for t in older:
-            seen.add(t['id'])
-        save_seen_threads(seen)
-
-        if not recent:
-            print("  No deals in the last 24 hours. Waiting for new ones...")
-            return
-
-        print(f"  First run: {len(recent)} deal(s) from the last 24 hours.")
-        threads_to_process = list(reversed(recent))
     else:
-        new_threads = [t for t in real_threads if t['id'] not in seen]
-        if not new_threads:
-            print("  No new deals since last check.")
-            return
-        print(f"  Found {len(new_threads)} new thread(s)!")
-        threads_to_process = list(reversed(new_threads))
+        print(f"  Got {len(threads)} threads from BGG.")
 
-    # Research all threads, then send ONE consolidated email
+        seen = load_seen_threads()
+
+        # Filter out pinned/sticky non-deal posts
+        real_threads = [t for t in threads
+                        if t['subject'].lower().strip() not in SKIP_SUBJECTS]
+
+        if first_run:
+            recent = [t for t in real_threads if _is_within_hours(t['post_date'], hours=24)]
+            older  = [t for t in real_threads if not _is_within_hours(t['post_date'], hours=24)]
+            for t in older:
+                seen.add(t['id'])
+            save_seen_threads(seen)
+
+            if not recent:
+                print("  No deals in the last 24 hours. Waiting for new ones...")
+            else:
+                print(f"  First run: {len(recent)} deal(s) from the last 24 hours.")
+                threads_to_process = list(reversed(recent))
+                _process_and_send_bgg(threads_to_process, seen)
+        else:
+            new_threads = [t for t in real_threads if t['id'] not in seen]
+            if not new_threads:
+                print("  No new BGG deals since last check.")
+            else:
+                print(f"  Found {len(new_threads)} new thread(s)!")
+                threads_to_process = list(reversed(new_threads))
+                _process_and_send_bgg(threads_to_process, seen)
+
+    # Always check GameNerdz Deal of the Day.
+    # check_gamenerdz_dotd(force=False) has its own dedup guard (gamenerdz_sent.txt)
+    # so it only sends once per calendar day regardless of how often this runs.
+    try:
+        gamenerdz_dotd.check_gamenerdz_dotd(force=False)
+    except Exception as e:
+        print(f"\n  GameNerdz DotD check error: {e}")
+        traceback.print_exc()
+
+
+def _process_and_send_bgg(threads_to_process: list, seen: Set[str]) -> None:
+    """Research all threads and send a consolidated alert. Updates seen set."""
     deals = []
     for thread in threads_to_process:
         try:
@@ -276,36 +289,34 @@ def run_test_mode() -> None:
     threads = bgg_api.get_forum_threads(forum_id=config.BGG_FORUM_ID, page=1)
     if not threads:
         print("Could not fetch threads from BGG.")
-        return
-
-    recent = [
-        t for t in threads
-        if t['subject'].lower().strip() not in SKIP_SUBJECTS
-        and _is_within_hours(t['post_date'], hours=24)
-    ]
-
-    if not recent:
-        print("No deals found in the last 24 hours on BGG Hot Deals.")
-        print("(Tip: try increasing the window by editing run_test_mode in monitor.py)")
     else:
-        print(f"Found {len(recent)} deal(s) from the last 24 hours:\n")
-        for t in recent:
-            print(f"  - {t['subject']}")
-        print()
+        recent = [
+            t for t in threads
+            if t['subject'].lower().strip() not in SKIP_SUBJECTS
+            and _is_within_hours(t['post_date'], hours=24)
+        ]
 
-    recent.reverse()  # oldest first
-    deals = []
-    for thread in recent:
-        try:
-            deal = research_thread(thread)
-            if deal:
-                deals.append(deal)
-        except Exception as e:
-            print(f"Error processing '{thread['subject']}': {e}")
-            traceback.print_exc()
-        time.sleep(2)
+        if not recent:
+            print("No deals found in the last 24 hours on BGG Hot Deals.")
+        else:
+            print(f"Found {len(recent)} deal(s) from the last 24 hours:\n")
+            for t in recent:
+                print(f"  - {t['subject']}")
+            print()
 
-    # Also check GameNerdz Deal of the Day
+        recent.reverse()  # oldest first
+        deals = []
+        for thread in recent:
+            try:
+                deal = research_thread(thread)
+                if deal:
+                    deals.append(deal)
+            except Exception as e:
+                print(f"Error processing '{thread['subject']}': {e}")
+                traceback.print_exc()
+            time.sleep(2)
+
+    # Also check GameNerdz Deal of the Day (force=True bypasses dedup)
     print("\n--- Checking GameNerdz Deal of the Day ---")
     try:
         dotd = gamenerdz_dotd.fetch_dotd()
@@ -406,7 +417,7 @@ if __name__ == '__main__':
 
     # --once: single check and exit (for GitHub Actions / cron jobs)
     if '--once' in sys.argv:
-        print("=== BGG Deal Monitor — single check ===")
+        print("=== Deal Monitor — single check ===")
         is_first_run = not config.SEEN_THREADS_FILE.exists()
         check_for_new_deals(first_run=is_first_run)
         print("=== Done ===")
@@ -414,7 +425,7 @@ if __name__ == '__main__':
 
     print("""
 +----------------------------------------------------------+
-|          BGG Hot Deals Monitor -- Starting Up           |
+|          Board Game Deals Monitor -- Starting Up        |
 +----------------------------------------------------------+
 """)
     print(f"  Checking every {config.CHECK_INTERVAL_MINUTES} minutes.")
