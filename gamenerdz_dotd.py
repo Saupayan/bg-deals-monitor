@@ -81,11 +81,25 @@ def _mark_sent_today() -> None:
 
 def fetch_dotd() -> Optional[Dict]:
     """
-    Scrape the GameNerdz Deal of the Day page.
+    Fetch the GameNerdz Deal of the Day.
     Returns a dict with keys: name, price_str, url, image_url
-    or None if the page couldn't be parsed.
+    or None if the product couldn't be found.
+
+    Strategy order:
+      0. Magento 2 GraphQL â fastest; returns structured JSON without JS rendering
+      1â4. HTML fallbacks via _parse_dotd_page (JSON-LD, x-magento-init, CSS, h1)
     """
     print(f"\n  Fetching GameNerdz Deal of the Day from {GAMENERDZ_DOTD_URL} ...")
+
+    # ââ Strategy 0: Magento 2 GraphQL ââââââââââââââââââââââââââââââââââââââââ
+    # GameNerdz runs Magento 2, which always exposes /graphql for storefront
+    # queries.  This endpoint is public (no auth) and returns full product data
+    # as structured JSON â no JavaScript rendering needed.
+    result = _fetch_dotd_via_graphql(GAMENERDZ_DOTD_URL)
+    if result:
+        return result
+
+    # ââ Fallback: HTML scraping strategies (JSON-LD, x-magento-init, CSSâ¦) ââ
     try:
         resp = requests.get(GAMENERDZ_DOTD_URL, headers=HEADERS, timeout=20)
         if resp.status_code != 200:
@@ -93,9 +107,6 @@ def fetch_dotd() -> Optional[Dict]:
             return None
 
         soup = BeautifulSoup(resp.text, 'lxml')
-
-        # Strategy 1: look for a product name in common e-commerce patterns
-        # GameNerdz uses Magento-style HTML
         deal = _parse_dotd_page(soup, resp.url)
         if deal:
             return deal
@@ -106,6 +117,113 @@ def fetch_dotd() -> Optional[Dict]:
     except Exception as e:
         print(f"  Error fetching GameNerdz DotD: {e}")
         traceback.print_exc()
+        return None
+
+
+def _fetch_dotd_via_graphql(dotd_url: str) -> Optional[Dict]:
+    """
+    Query the Magento 2 GraphQL endpoint for the Deal of the Day product.
+
+    Magento 2 exposes /graphql as a public storefront API â no auth required
+    for catalog/category queries.  The category URL key is derived from the
+    last path segment of the DotD URL (e.g. 'deal-of-the-day').
+    """
+    import json as _json
+
+    url_key = dotd_url.rstrip('/').split('/')[-1]   # "deal-of-the-day"
+
+    query = """{
+  categoryList(filters: {url_key: {eq: "%s"}}) {
+    id
+    name
+    products {
+      items {
+        name
+        price_range {
+          minimum_price {
+            final_price { value currency }
+          }
+        }
+        url_key
+        url_rewrites { url }
+        small_image { url }
+      }
+    }
+  }
+}""" % url_key
+
+    try:
+        resp = requests.post(
+            "https://www.gamenerdz.com/graphql",
+            json={"query": query},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            timeout=15,
+        )
+        print(f"  DEBUG: GraphQL HTTP {resp.status_code}")
+
+        if resp.status_code != 200:
+            print(f"  DEBUG: GraphQL unavailable (HTTP {resp.status_code})")
+            return None
+
+        data = resp.json()
+
+        if 'errors' in data:
+            print(f"  DEBUG: GraphQL errors: {data['errors'][:1]}")
+            return None
+
+        categories = data.get('data', {}).get('categoryList', [])
+        print(f"  DEBUG: GraphQL categories found: {len(categories)}")
+
+        if not categories:
+            return None
+
+        products = categories[0].get('products', {}).get('items', [])
+        print(f"  DEBUG: GraphQL products in DotD category: {len(products)}")
+
+        if not products:
+            return None
+
+        product = products[0]
+        name = product.get('name', '').strip()
+
+        if not name or len(name) <= 5 or 'deal of the day' in name.lower():
+            print(f"  DEBUG: GraphQL product name unusable: '{name}'")
+            return None
+
+        # Price
+        price_val = (product.get('price_range', {})
+                     .get('minimum_price', {})
+                     .get('final_price', {})
+                     .get('value'))
+        price_str = f"${float(price_val):.2f}" if price_val else 'N/A'
+
+        # Product URL â prefer url_rewrites (full path) over bare url_key
+        rewrites = product.get('url_rewrites') or []
+        if rewrites:
+            rewrite_path = rewrites[0].get('url', '')
+            product_url = (f"https://www.gamenerdz.com/{rewrite_path}"
+                           if rewrite_path else dotd_url)
+        else:
+            url_k = product.get('url_key', '')
+            product_url = (f"https://www.gamenerdz.com/{url_k}.html"
+                           if url_k else dotd_url)
+
+        # Image
+        image_url = (product.get('small_image') or {}).get('url', '') or ''
+
+        print(f"  Found DotD via GraphQL: '{name}' at {price_str}")
+        return {
+            'name':      name,
+            'price_str': price_str,
+            'url':       product_url,
+            'image_url': image_url,
+        }
+
+    except Exception as e:
+        print(f"  DEBUG: GraphQL error: {e}")
         return None
 
 
@@ -408,7 +526,7 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
 
 # âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # MAIN CHECK FUNCTION
-# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+# ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def check_gamenerdz_dotd(force: bool = False) -> None:
     """
