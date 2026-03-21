@@ -24,7 +24,7 @@ Usage:
   python monitor.py            -- run normally (loops forever, checks every 15 min)
   python monitor.py --once      -- run one check then exit (used by GitHub Actions scheduled/manual)
   python monitor.py --force     -- send ALL deals from last 24h right now, skip seen filter
-                                   (used by WhatsApp manual trigger via repository_dispatch)
+                                   + today's GameNerdz DotD (used by WhatsApp manual trigger)
   python monitor.py --test      -- same as --force (alias for local development)
   python monitor.py --heartbeat -- send compact "monitor alive" WhatsApp with live deal list
                                    (used by hourly GitHub Actions heartbeat job)
@@ -47,6 +47,7 @@ import marketplace
 import price_checker
 import emailer
 import whatsapp_notifier
+import gamenerdz_dotd
 from game_parser import extract_game_name, is_active_deal
 
 
@@ -260,13 +261,13 @@ def check_for_new_deals(first_run: bool = False) -> None:
 
 
 # -----------------------------------------------------------------------------
-# TEST MODE
+# TEST MODE  (--force / --test)
 # -----------------------------------------------------------------------------
 
 def run_test_mode() -> None:
     """
-    Process all deals posted in the last 24 hours right now.
-    Does NOT update seen_threads.json, so you can re-run it freely.
+    Process all deals posted in the last 24 hours right now, plus today's
+    GameNerdz Deal of the Day. Does NOT update seen_threads.json.
     Used by both --test (local dev) and --force (WhatsApp manual trigger).
     """
     mode = "FORCE / MANUAL TRIGGER" if '--force' in sys.argv else "TEST"
@@ -286,12 +287,11 @@ def run_test_mode() -> None:
     if not recent:
         print("No deals found in the last 24 hours on BGG Hot Deals.")
         print("(Tip: try increasing the window by editing run_test_mode in monitor.py)")
-        return
-
-    print(f"Found {len(recent)} deal(s) from the last 24 hours:\n")
-    for t in recent:
-        print(f"  - {t['subject']}")
-    print()
+    else:
+        print(f"Found {len(recent)} deal(s) from the last 24 hours:\n")
+        for t in recent:
+            print(f"  - {t['subject']}")
+        print()
 
     recent.reverse()  # oldest first
     deals = []
@@ -304,6 +304,21 @@ def run_test_mode() -> None:
             print(f"Error processing '{thread['subject']}': {e}")
             traceback.print_exc()
         time.sleep(2)
+
+    # Also check GameNerdz Deal of the Day
+    print("\n--- Checking GameNerdz Deal of the Day ---")
+    try:
+        dotd = gamenerdz_dotd.fetch_dotd()
+        if dotd:
+            dotd_deal = gamenerdz_dotd.research_dotd(dotd)
+            if dotd_deal:
+                deals.append(dotd_deal)
+                print(f"  Added GameNerdz DotD: '{dotd['name']}'")
+        else:
+            print("  No GameNerdz DotD found right now.")
+    except Exception as e:
+        print(f"  GameNerdz DotD error: {e}")
+        traceback.print_exc()
 
     if deals:
         print(f"\n  Sending consolidated email for {len(deals)} deal(s)...")
@@ -320,10 +335,11 @@ def run_test_mode() -> None:
 
 def run_heartbeat_mode() -> None:
     """
-    Send a compact "monitor alive" WhatsApp showing what's currently live on BGG Hot Deals.
-    No email. No seen_threads.json changes. Fast — no BGG API lookups per game.
+    Send a compact "monitor alive" WhatsApp showing what's currently live on BGG Hot Deals
+    and today's GameNerdz DotD. No email. No seen_threads.json changes.
     Runs hourly so you can verify the monitor is healthy even on quiet days.
     """
+    from datetime import datetime
     now_str = datetime.now().strftime('%H:%M')
     print(f"\n=== HEARTBEAT @ {now_str} ===\n")
 
@@ -345,11 +361,21 @@ def run_heartbeat_mode() -> None:
     if not recent:
         lines.append("No deals on BGG Hot Deals in the last 24h.")
     else:
-        lines.append(f"Live deals right now ({len(recent)}):")
+        lines.append(f"*BGG Hot Deals ({len(recent)}):*")
         for t in recent:
             game_name = extract_game_name(t['subject']) or t['subject']
             thread_url = f"https://boardgamegeek.com/thread/{t['id']}" if t.get('id') else ''
             lines.append(f"• {game_name}: {thread_url}")
+
+    # Also show today's GameNerdz DotD if available
+    try:
+        dotd = gamenerdz_dotd.fetch_dotd()
+        if dotd:
+            lines.append("")
+            lines.append(f"*GameNerdz Deal of the Day:*")
+            lines.append(f"• {dotd['name']} — {dotd['price_str']}: {dotd['url']}")
+    except Exception:
+        pass  # Heartbeat should never crash on GameNerdz errors
 
     lines.append("")
     lines.append("_Next check in ~15 min_")
