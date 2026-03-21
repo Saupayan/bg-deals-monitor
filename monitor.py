@@ -327,6 +327,21 @@ def run_test_mode() -> None:
                 print(f"  Added GameNerdz DotD: '{dotd['name']}'")
         else:
             print("  No GameNerdz DotD found right now.")
+            # Fallback: send a screenshot of the DotD page via thum.io.
+            # thum.io is a free screenshot-as-a-service — no API key needed.
+            # This runs even in the main bgg-monitor.yml workflow where Playwright
+            # is not available, because it only requires an HTTP request.
+            thum_url = (
+                "https://image.thum.io/get/noanimate/"
+                "https://www.gamenerdz.com/deal-of-the-day"
+            )
+            print("  Sending GameNerdz DotD page screenshot via WhatsApp (thum.io)...")
+            whatsapp_notifier.send_image_whatsapp(
+                thum_url,
+                "🏪 GameNerdz Deal of the Day\n"
+                "⚠️ Couldn't parse details — here's the live page.\n"
+                "🔗 https://www.gamenerdz.com/deal-of-the-day",
+            )
     except Exception as e:
         print(f"  GameNerdz DotD error: {e}")
         traceback.print_exc()
