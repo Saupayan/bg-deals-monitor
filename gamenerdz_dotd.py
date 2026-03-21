@@ -40,9 +40,9 @@ import price_checker
 from game_parser import extract_game_name
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # CONSTANTS
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 GAMENERDZ_DOTD_URL = "https://www.gamenerdz.com/deal-of-the-day"
 
@@ -58,9 +58,9 @@ HEADERS = {
 SENT_TODAY_FILE = Path(__file__).parent / "gamenerdz_sent.txt"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # ALREADY-SENT STATE
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def _already_sent_today() -> bool:
     """Return True if we already sent a DotD alert today."""
@@ -75,9 +75,9 @@ def _mark_sent_today() -> None:
     SENT_TODAY_FILE.write_text(str(date.today()))
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # SCRAPE GAMENERDZ DotD
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def fetch_dotd(use_playwright: bool = True) -> Optional[Dict]:
     """
@@ -86,9 +86,9 @@ def fetch_dotd(use_playwright: bool = True) -> Optional[Dict]:
     or None if the product couldn't be found.
 
     Strategy order:
-      0. Playwright headless Chromium — renders the full JS page (use_playwright=True only)
-      1. Magento 2 GraphQL — fast structured API (requires server to be public)
-      2–5. HTML fallbacks via _parse_dotd_page (JSON-LD, x-magento-init, CSS, h1)
+      0. Playwright headless Chromium â renders the full JS page (use_playwright=True only)
+      1. Magento 2 GraphQL â fast structured API (requires server to be public)
+      2â5. HTML fallbacks via _parse_dotd_page (JSON-LD, x-magento-init, CSS, h1)
 
     use_playwright=False is used by monitor.py (15-min loop) since Playwright is
     only installed in the dedicated gamenerdz-dotd.yml daily workflow, not
@@ -96,8 +96,8 @@ def fetch_dotd(use_playwright: bool = True) -> Optional[Dict]:
     """
     print(f"\n  Fetching GameNerdz Deal of the Day from {GAMENERDZ_DOTD_URL} ...")
 
-    # ── Strategy 0: Playwright headless Chromium ──────────────────────────────
-    # Full browser rendering — the only strategy that can execute Magento 2's
+    # ââ Strategy 0: Playwright headless Chromium ââââââââââââââââââââââââââââââ
+    # Full browser rendering â the only strategy that can execute Magento 2's
     # JavaScript and access the rendered product listing DOM.
     # Only used when the Playwright workflow calls this function.
     if use_playwright:
@@ -105,7 +105,7 @@ def fetch_dotd(use_playwright: bool = True) -> Optional[Dict]:
         if result:
             return result
 
-    # ── Strategy 1: Magento 2 GraphQL ────────────────────────────────────────
+    # ââ Strategy 1: Magento 2 GraphQL ââââââââââââââââââââââââââââââââââââââââ
     # GameNerdz runs Magento 2, which may expose /graphql for storefront queries.
     # Returns 401 on gamenerdz.com (auth required), kept as fallback in case
     # they change their configuration.
@@ -113,7 +113,7 @@ def fetch_dotd(use_playwright: bool = True) -> Optional[Dict]:
     if result:
         return result
 
-    # ── Fallback: HTML scraping strategies (JSON-LD, x-magento-init, CSS…) ──
+    # ââ Fallback: HTML scraping strategies (JSON-LD, x-magento-init, CSSâ¦) ââ
     try:
         resp = requests.get(GAMENERDZ_DOTD_URL, headers=HEADERS, timeout=20)
         if resp.status_code != 200:
@@ -125,7 +125,7 @@ def fetch_dotd(use_playwright: bool = True) -> Optional[Dict]:
         if deal:
             return deal
 
-        print("  Could not parse DotD — page structure may have changed.")
+        print("  Could not parse DotD â page structure may have changed.")
         return None
 
     except Exception as e:
@@ -138,7 +138,7 @@ def _fetch_dotd_via_playwright(dotd_url: str) -> Optional[Dict]:
     """
     Use Playwright headless Chromium to render the GameNerdz DotD page.
 
-    GameNerdz uses a fully JS-rendered Magento 2 storefront — product listings
+    GameNerdz uses a fully JS-rendered Magento 2 storefront â product listings
     are NOT in the initial server HTML and cannot be fetched with requests.get().
     Playwright launches a real headless Chromium browser, executes the page JS,
     waits for products to appear in the DOM, then extracts the HTML for parsing.
@@ -149,7 +149,7 @@ def _fetch_dotd_via_playwright(dotd_url: str) -> Optional[Dict]:
     try:
         from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
     except ImportError:
-        print("  DEBUG: Playwright not installed — skipping headless browser strategy")
+        print("  DEBUG: Playwright not installed â skipping headless browser strategy")
         return None
 
     try:
@@ -177,10 +177,20 @@ def _fetch_dotd_via_playwright(dotd_url: str) -> Optional[Dict]:
                 )
                 print("  DEBUG: Playwright: product selector found in DOM")
             except PWTimeout:
-                print("  DEBUG: Playwright: no product selector within 15s — parsing anyway")
+                print("  DEBUG: Playwright: no product selector within 15s â parsing anyway")
 
             rendered_html = page.content()
             final_url = page.url
+
+            # Take a viewport screenshot before closing.
+            # Saved to /tmp/gn_dotd.png so check_gamenerdz_dotd() can send it
+            # via WhatsApp regardless of whether the product name could be parsed.
+            try:
+                page.screenshot(path='/tmp/gn_dotd.png', full_page=False)
+                print("  DEBUG: Playwright screenshot saved to /tmp/gn_dotd.png")
+            except Exception as _ss_err:
+                print(f"  DEBUG: Screenshot failed (non-fatal): {_ss_err}")
+
             browser.close()
 
         print(f"  DEBUG: Playwright rendered {len(rendered_html)} chars")
@@ -203,7 +213,7 @@ def _fetch_dotd_via_graphql(dotd_url: str) -> Optional[Dict]:
     """
     Query the Magento 2 GraphQL endpoint for the Deal of the Day product.
 
-    Magento 2 exposes /graphql as a public storefront API — no auth required
+    Magento 2 exposes /graphql as a public storefront API â no auth required
     for catalog/category queries.  The category URL key is derived from the
     last path segment of the DotD URL (e.g. 'deal-of-the-day').
     """
@@ -279,7 +289,7 @@ def _fetch_dotd_via_graphql(dotd_url: str) -> Optional[Dict]:
                      .get('value'))
         price_str = f"${float(price_val):.2f}" if price_val else 'N/A'
 
-        # Product URL — prefer url_rewrites (full path) over bare url_key
+        # Product URL â prefer url_rewrites (full path) over bare url_key
         rewrites = product.get('url_rewrites') or []
         if rewrites:
             rewrite_path = rewrites[0].get('url', '')
@@ -313,11 +323,11 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
     GameNerdz uses Magento 2 whose category pages are JavaScript-rendered,
     so the product listing HTML is NOT in the initial server response.
     However, Magento 2 always embeds Schema.org JSON-LD structured data
-    server-side for SEO purposes — that IS present in the static HTML and
+    server-side for SEO purposes â that IS present in the static HTML and
     is the most reliable extraction target.
 
     Fall-back chain:
-      1. JSON-LD <script type="application/ld+json"> — Product or ItemList
+      1. JSON-LD <script type="application/ld+json"> â Product or ItemList
       2. text/x-magento-init script tags (sometimes embed product config)
       3. Visible CSS selectors (only works if URL redirects to a product page)
       4. Any non-header h1
@@ -329,7 +339,7 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
     product_url = page_url
     image_url = ''
 
-    # ── Strategy 1: JSON-LD structured data (server-rendered, SEO-driven) ────
+    # ââ Strategy 1: JSON-LD structured data (server-rendered, SEO-driven) ââââ
     for script in soup.find_all('script', {'type': 'application/ld+json'}):
         try:
             data = _json.loads(script.string or '')
@@ -367,7 +377,7 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
         if name:
             break
 
-    # ── Strategy 2: text/x-magento-init script tags ───────────────────────
+    # ââ Strategy 2: text/x-magento-init script tags âââââââââââââââââââââââ
     if not name:
         for script in soup.find_all('script', {'type': 'text/x-magento-init'}):
             raw = script.string or ''
@@ -381,7 +391,7 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
             except Exception:
                 pass
 
-    # ── Strategy 3: visible CSS selectors (works if URL is a product page) ─
+    # ââ Strategy 3: visible CSS selectors (works if URL is a product page) â
     if not name:
         for css in [
             'a.product-item-link',
@@ -401,7 +411,7 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
                     name = candidate
                     break
 
-    # ── Strategy 4: any h1 that isn't the category page header ──────────────
+    # ââ Strategy 4: any h1 that isn't the category page header ââââââââââââââ
     if not name:
         for elem in soup.find_all('h1'):
             candidate = elem.get_text(strip=True)
@@ -422,7 +432,7 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
         print(f"  DEBUG: JSON-LD @type values found: {ld_types}")
         return None
 
-    # ── Price fallback (if not already set from JSON-LD) ─────────────────
+    # ââ Price fallback (if not already set from JSON-LD) âââââââââââââââââ
     if price_str == 'N/A':
         price_elem = soup.find('meta', {'itemprop': 'price'})
         if price_elem and price_elem.get('content'):
@@ -447,7 +457,7 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
                     price_str = candidate
                     break
 
-    # ── Product URL fallback ───────────────────────────────────────────────
+    # ââ Product URL fallback âââââââââââââââââââââââââââââââââââââââââââââââ
     if product_url == page_url:
         listing_link = soup.select_one('a.product-item-link')
         if listing_link and listing_link.get('href'):
@@ -457,7 +467,7 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
             if canonical and canonical.get('href'):
                 product_url = canonical['href']
 
-    # ── Image fallback ─────────────────────────────────────────────────────
+    # ââ Image fallback âââââââââââââââââââââââââââââââââââââââââââââââââââââ
     if not image_url:
         img = (soup.find('img', {'itemprop': 'image'}) or
                soup.find('img', {'class': 'product-image-photo'}))
@@ -517,9 +527,9 @@ def _deep_find(obj, key: str, depth: int = 0):
     return None
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # FULL RESEARCH PIPELINE
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def research_dotd(dotd: Dict) -> Optional[Dict]:
     """
@@ -587,7 +597,7 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     thread = {
         'id':       '',           # no BGG thread ID for DotD
         'deal_url': dotd['url'],  # actual GameNerdz product page
-        'subject':  f"GameNerdz Deal of the Day: {raw_name} — {dotd['price_str']}",
+        'subject':  f"GameNerdz Deal of the Day: {raw_name} â {dotd['price_str']}",
         'author':   'GameNerdz',
         'post_date': '',
     }
@@ -603,9 +613,9 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # MAIN CHECK FUNCTION
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> None:
     """
@@ -625,8 +635,33 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
         return
 
     dotd = fetch_dotd(use_playwright=use_playwright)
+
+    # ââ Screenshot fallback (Playwright workflow only) âââââââââââââââââââââââââ
+    # If Playwright ran, it saves a screenshot to /tmp/gn_dotd.png regardless of
+    # whether the product name could be parsed.  Send it so you always see the
+    # page even when the HTML structure has changed and parsing failed.
+    if use_playwright:
+        import os as _os
+        screenshot_path = '/tmp/gn_dotd.png'
+        if _os.path.exists(screenshot_path):
+            if dotd:
+                ss_caption = (
+                    f"ðª GameNerdz Deal of the Day: {dotd['name']} â {dotd['price_str']}\n"
+                    f"ð {dotd.get('url', GAMENERDZ_DOTD_URL)}"
+                )
+            else:
+                ss_caption = (
+                    "ðª GameNerdz Deal of the Day\n"
+                    "â ï¸ Couldn't parse product details â here's the live page screenshot.\n"
+                    f"ð {GAMENERDZ_DOTD_URL}"
+                )
+            print("  Sending DotD screenshot via WhatsApp...")
+            whatsapp_notifier.send_image_whatsapp(screenshot_path, ss_caption)
+        else:
+            print("  No screenshot file found at /tmp/gn_dotd.png â skipping image send")
+
     if not dotd:
-        print("  No DotD found — may not be posted yet or page changed.")
+        print("  No DotD found â may not be posted yet or page changed.")
         return
 
     deal = research_dotd(dotd)
@@ -643,27 +678,27 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
         _mark_sent_today()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 # ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
+# âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
 if __name__ == '__main__':
 
     # --test: run once right now, bypass dedup, and exit
     if '--test' in sys.argv:
-        print("\nTEST MODE — checking GameNerdz DotD right now...\n")
+        print("\nTEST MODE â checking GameNerdz DotD right now...\n")
         check_gamenerdz_dotd(force=True)
         sys.exit(0)
 
     # --once: run once right now (respects already-sent-today guard) and exit
     if '--once' in sys.argv:
-        print("\nONCE MODE — checking GameNerdz DotD (respecting dedup)...\n")
+        print("\nONCE MODE â checking GameNerdz DotD (respecting dedup)...\n")
         check_gamenerdz_dotd(force=False)
         sys.exit(0)
 
     print("""
 +----------------------------------------------------------+
-|       GameNerdz Deal of the Day Monitor — Starting      |
+|       GameNerdz Deal of the Day Monitor â Starting      |
 +----------------------------------------------------------+
 """)
     print("  Will check at 1:05 PM ET every day.")
@@ -677,7 +712,7 @@ if __name__ == '__main__':
     # Schedule daily at 1:05pm ET
     # We convert to local time: schedule library uses local clock.
     # If your computer is set to ET this is simply "13:05".
-    # If your clock is in a different timezone, adjust accordingly.
+  2 # If your clock is in a different timezone, adjust accordingly.
     schedule.every().day.at("13:05").do(check_gamenerdz_dotd)
     print("  Scheduled for 1:05 PM (local time) daily. Waiting...\n")
 
