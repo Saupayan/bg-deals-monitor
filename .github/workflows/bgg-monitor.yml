@@ -3,7 +3,9 @@ name: BGG Hot Deals Monitor
 on:
   schedule:
     - cron: '*/15 * * * *'   # Every 15 minutes
-  workflow_dispatch:        # Allows manual trigger from GitHub UI
+  workflow_dispatch:          # Allows manual trigger from GitHub UI
+  repository_dispatch:        # Allows trigger via GitHub API (e.g. from WhatsApp bot)
+    types: [check-deals]
 
 jobs:
   check-deals:
