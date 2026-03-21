@@ -112,47 +112,99 @@ def fetch_dotd() -> Optional[Dict]:
 def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
     """
     Try multiple HTML patterns to extract the DotD product name and price.
-    GameNerdz uses Magento; their DotD URL is a category page listing one
-    product, so the product name is in a listing element, not a bare h1.
+
+    GameNerdz uses Magento 2 whose category pages are JavaScript-rendered,
+    so the product listing HTML is NOT in the initial server response.
+    However, Magento 2 always embeds Schema.org JSON-LD structured data
+    server-side for SEO purposes â that IS present in the static HTML and
+    is the most reliable extraction target.
+
+    Fall-back chain:
+      1. JSON-LD <script type="application/ld+json"> â Product or ItemList
+      2. text/x-magento-init script tags (sometimes embed product config)
+      3. Visible CSS selectors (only works if URL is a product page)
+      4. Any non-header h1
     """
+    import json as _json
 
     name = None
+    price_str = 'N/A'
+    product_url = page_url
+    image_url = ''
 
-    # Strategy A: category/listing page â the DotD URL shows one product in a
-    # product grid.  Magento listing pages put the name in these elements.
-    for css in [
-        'a.product-item-link',
-        'strong.product-item-name',
-        '.product-item-name a',
-        '.product-item-name',
-        '.product-name a',
-        '.product-name',
-        '[data-ui-id="page-title-wrapper"]',
-        '.product-info-main h1',
-    ]:
-        elem = soup.select_one(css)
-        if elem:
-            candidate = elem.get_text(strip=True)
-            if len(candidate) > 5 and 'deal of the day' not in candidate.lower():
-                name = candidate
-                break
+    # ââ Strategy 1: JSON-LD structured data (server-rendered, SEO-driven) ââââ
+    for script in soup.find_all('script', {'type': 'application/ld+json'}):
+        try:
+            data = _json.loads(script.string or '')
+        except Exception:
+            continue
 
-    # Strategy B: product detail page selectors (if URL redirects to a product)
+        # Handle both a single object and a list of objects
+        items = data if isinstance(data, list) else [data]
+        for item in items:
+            # ItemList containing products (common on category pages)
+            if item.get('@type') == 'ItemList':
+                elements = item.get('itemListElement', [])
+                if elements:
+                    first = elements[0]
+                    # element can be a ListItem wrapping a Product, or a Product
+                    product = first.get('item', first)
+                    candidate = product.get('name', '')
+                    if candidate and len(candidate) > 5 and 'deal of the day' not in candidate.lower():
+                        name = candidate
+                        price_str = _price_from_jsonld(product)
+                        product_url = product.get('url', page_url)
+                        image_url = _image_from_jsonld(product)
+                        break
+
+            # Direct Product object (common on product detail pages)
+            if not name and item.get('@type') == 'Product':
+                candidate = item.get('name', '')
+                if candidate and len(candidate) > 5 and 'deal of the day' not in candidate.lower():
+                    name = candidate
+                    price_str = _price_from_jsonld(item)
+                    product_url = item.get('url', page_url)
+                    image_url = _image_from_jsonld(item)
+                    break
+
+        if name:
+            break
+
+    # ââ Strategy 2: text/x-magento-init script tags âââââââââââââââââââââââ
     if not name:
-        for selector in [
-            ('h1', {'class': 'page-title'}),
-            ('span', {'itemprop': 'name'}),
-            ('h1', {'class': 'product-name'}),
+        for script in soup.find_all('script', {'type': 'text/x-magento-init'}):
+            raw = script.string or ''
+            # Look for any "name" key that seems like a product title
+            try:
+                data = _json.loads(raw)
+                candidate = _deep_find(data, 'name')
+                if candidate and len(candidate) > 5 and 'deal of the day' not in candidate.lower():
+                    name = candidate
+                    break
+            except Exception:
+                pass
+
+    # ââ Strategy 3: visible CSS selectors (works if URL is a product page) â
+    if not name:
+        for css in [
+            'a.product-item-link',
+            'strong.product-item-name',
+            '.product-item-name a',
+            '.product-item-name',
+            '.product-name a',
+            '.product-name',
+            '.product-info-main h1',
+            'span[itemprop="name"]',
+            'h1.page-title',
         ]:
-            tag, attrs = selector
-            elem = soup.find(tag, attrs)
+            elem = soup.select_one(css)
             if elem:
                 candidate = elem.get_text(strip=True)
                 if len(candidate) > 5 and 'deal of the day' not in candidate.lower():
                     name = candidate
                     break
 
-    # Strategy C: any h1 that isn't the page category header
+    # ââ Strategy 4: any h1 that isn't the category page header ââââââââââââââ
     if not name:
         for elem in soup.find_all('h1'):
             candidate = elem.get_text(strip=True)
@@ -161,23 +213,26 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
                 break
 
     if not name:
-        # Debug dump so we can diagnose future failures
+        # Debug dump so future structure changes are diagnosable
         page_text = soup.get_text(separator=' ', strip=True)
         print(f"  DEBUG: page title tag = {soup.title.string if soup.title else 'N/A'}")
         print(f"  DEBUG: first 500 chars of visible text: {page_text[:500]}")
         all_h1 = [e.get_text(strip=True) for e in soup.find_all('h1')]
-        print(f"  DEBUG: all h1 tags found: {all_h1}")
+        print(f"  DEBUG: all h1 tags found: {all_h2}")
+        ld_types = [_json.loads(hs.string or '{}').get('@type', '?')
+                    for s in soup.find_all('script', {'type': 'application/ld+json'})
+                    if s.string]
+        print(f"  DEBUG: JSON-LD @type values found: {ld_types}")
         return None
 
-    # Price â try meta tag first (works on both listing and product pages),
-    # then fall back to visible span elements.
-    price_str = 'N/A'
-    price_elem = soup.find('meta', {'itemprop': 'price'})
-    if price_elem and price_elem.get('content'):
-        try:
-            price_str = f"${float(price_elem['content']):.2f}"
-        except ValueError:
-            pass
+    # ââ Price fallback (if not already set from JSON-LD) âââââââââââââââââ
+    if price_str == 'N/A':
+        price_elem = soup.find('meta', {'itemprop': 'price'})
+        if price_elem and price_elem.get('content'):
+            try:
+                price_str = f"${float(price_elem['content']):.2f}"
+            except ValueError:
+                pass
 
     if price_str == 'N/A':
         for css in [
@@ -191,26 +246,26 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
             pe = soup.select_one(css)
             if pe:
                 candidate = pe.get_text(strip=True)
-                if '$' in candidate or candidate.replace('.','').isdigit():
+                if '$' in candidate or candidate.replace('.', '').isdigit():
                     price_str = candidate
                     break
 
-    # Product URL: prefer the listing link href (direct product page),
-    # then canonical tag, then fall back to the DotD page URL itself.
-    product_url = page_url
-    listing_link = soup.select_one('a.product-item-link')
-    if listing_link and listing_link.get('href'):
-        product_url = listing_link['href']
-    else:
-        canonical = soup.find('link', {'rel': 'canonical'})
-        if canonical and canonical.get('href'):
-            product_url = canonical['href']
+    # ââ Product URL fallback âââââââââââââââââââââââââââââââââââââââââââââââ
+    if product_url == page_url:
+        listing_link = soup.select_one('a.product-item-link')
+        if listing_link and listing_link.get('href'):
+            product_url = listing_link['href']
+        else:
+            canonical = soup.find('link', {'rel': 'canonical'})
+            if canonical and canonical.get('href'):
+                product_url = canonical['href']
 
-    # Image
-    image_url = ''
-    img = soup.find('img', {'itemprop': 'image'}) or soup.find('img', {'class': 'product-image-photo'})
-    if img:
-        image_url = img.get('src', '')
+    # ââ Image fallback âââââââââââââââââââââââââââââââââââââââââââââââââââââ
+    if not image_url:
+        img = (soup.find('img', {'itemprop': 'image'}) or
+               soup.find('img', {'class': 'product-image-photo'}))
+        if img:
+            image_url = img.get('src', '')
 
     print(f"  Found DotD: '{name}' at {price_str}")
     return {
@@ -219,6 +274,50 @@ def _parse_dotd_page(soup: BeautifulSoup, page_url: str) -> Optional[Dict]:
         'url':        product_url,
         'image_url':  image_url,
     }
+
+
+def _price_from_jsonld(product: dict) -> str:
+    """Extract a price string from a JSON-LD Product object."""
+    import json as _json
+    offers = product.get('offers', {})
+    if isinstance(offers, list):
+        offers = offers[0] if offers else {}
+    price = offers.get('price') or offers.get('lowPrice')
+    if price:
+        try:
+            return f"${float(price):.2f}"
+        except (ValueError, TypeError):
+            return str(price)
+    return 'N/A'
+
+
+def _image_from_jsonld(product: dict) -> str:
+    """Extract an image URL from a JSON-LD Product object."""
+    img = product.get('image', '')
+    if isinstance(img, list):
+        img = img[0] if img else ''
+    if isinstance(img, dict):
+        img = img.get('url', '')
+    return str(img) if img else ''
+
+
+def _deep_find(obj, key: str, depth: int = 0):
+    """Recursively search a dict/list for a key whose value looks like a product name."""
+    if depth > 5:
+        return None
+    if isinstance(obj, dict):
+        if key in obj and isinstance(obj[key], str) and len(obj[key]) > 5:
+            return obj[key]
+        for v in obj.values():
+            result = _deep_find(v, key, depth + 1)
+            if result:
+                return result
+    elif isinstance(obj, list):
+        for item in obj[:5]:
+            result = _deep_find(item, key, depth + 1)
+            if result:
+                return result
+    return None
 
 
 # âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
@@ -249,7 +348,7 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
             print(f"  Details: '{game_details['name']}' | "
                   f"Rating: {game_details['average_rating']} | "
                   f"Weight: {game_details['weight']} | "
-                  f"Best at: {game_details['best_players']}p")
+                  f"Best at: {game_details['best_players']}\")
     else:
         print(f"  Not found on BGG. Will include with limited info.")
 
