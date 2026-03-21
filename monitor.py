@@ -22,6 +22,7 @@ First run behaviour:
 
 Usage:
   python monitor.py            -- run normally (loops forever, checks every 15 min)
+  python monitor.py --once     -- run one check then exit (used by GitHub Actions)
   python monitor.py --test     -- process all deals from the last 24 hours right now
 """
 
@@ -315,6 +316,14 @@ if __name__ == '__main__':
 
     if '--test' in sys.argv:
         run_test_mode()
+        sys.exit(0)
+
+    # --once: single check and exit (for GitHub Actions / cron jobs)
+    if '--once' in sys.argv:
+        print("=== BGG Deal Monitor — single check ===")
+        is_first_run = not config.SEEN_THREADS_FILE.exists()
+        check_for_new_deals(first_run=is_first_run)
+        print("=== Done ===")
         sys.exit(0)
 
     print("""
