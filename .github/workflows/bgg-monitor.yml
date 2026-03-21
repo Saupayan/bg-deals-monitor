@@ -1,4 +1,4 @@
-name: BGG Hot Deals Monitor
+name: Board Game Deals Monitor
 
 on:
   schedule:
@@ -15,14 +15,16 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Restore seen_threads.json from cache so we don't re-alert old deals
-      - name: Restore seen threads cache
+      # Restore state files so we don't re-alert old BGG deals or double-send GameNerdz DotD
+      - name: Restore monitor state cache
         uses: actions/cache/restore@v4
         with:
-          path: seen_threads.json
-          key: seen-threads-latest
+          path: |
+            seen_threads.json
+            gamenerdz_sent.txt
+          key: monitor-state-latest
           restore-keys: |
-            seen-threads-
+            monitor-state-
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
@@ -32,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run BGG deal monitor (single check)
+      - name: Run deal monitor (single check — all sources)
         env:
           BGG_API_TOKEN:          ${{ secrets.BGG_API_TOKEN }}
           ALERT_EMAIL:            ${{ secrets.ALERT_EMAIL }}
@@ -44,16 +46,18 @@ jobs:
           CHECK_INTERVAL_MINUTES: '60'
         run: |
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
-            echo "Manual WhatsApp trigger detected — sending all current deals (--force)"
+            echo "Manual WhatsApp trigger — sending all current deals (--force)"
             python monitor.py --force
           else
             python monitor.py --once
           fi
 
-      # Save seen_threads.json so next run knows what we already processed
-      - name: Save seen threads cache
+      # Save state so next run knows what was already processed / sent
+      - name: Save monitor state cache
         uses: actions/cache/save@v4
         if: always()   # save even if the check step failed
         with:
-          path: seen_threads.json
-          key: seen-threads-latest
+          path: |
+            seen_threads.json
+            gamenerdz_sent.txt
+          key: monitor-state-latest
