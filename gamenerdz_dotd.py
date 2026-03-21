@@ -712,7 +712,7 @@ if __name__ == '__main__':
     # Schedule daily at 1:05pm ET
     # We convert to local time: schedule library uses local clock.
     # If your computer is set to ET this is simply "13:05".
-  2 # If your clock is in a different timezone, adjust accordingly.
+    # If your clock is in a different timezone, adjust accordingly.
     schedule.every().day.at("13:05").do(check_gamenerdz_dotd)
     print("  Scheduled for 1:05 PM (local time) daily. Waiting...\n")
 
