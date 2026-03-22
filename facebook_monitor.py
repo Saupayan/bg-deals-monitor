@@ -247,42 +247,40 @@ def _format_game_card(game_name: str, rating: float, deal_price: Optional[float]
 # ─── Facebook scraping via Playwright ────────────────────────────────────────
 
 def _fb_login(page, email: str, password: str) -> bool:
-    """Log in to Facebook. Returns True on success."""
+    """
+    Log in via m.facebook.com (mobile site).
+    Mobile Facebook uses plain HTML forms — less JS complexity and less bot-detection
+    than the desktop SPA.  Returns True on success.
+    """
     try:
-        print("  FB: Navigating to facebook.com/login ...")
-        page.goto("https://www.facebook.com/login", wait_until="networkidle", timeout=45_000)
+        print("  FB: Navigating to m.facebook.com ...")
+        page.goto("https://m.facebook.com/login/", wait_until="domcontentloaded", timeout=45_000)
         time.sleep(3)
-
         print(f"  FB: Page URL after load: {page.url}")
 
-        # Dismiss cookie/privacy consent banner if shown (common in some regions)
+        # Dismiss cookie consent if present (mobile also shows it)
         for sel in [
-            '[data-cookiebanner="accept_button"]',
-            'button[title="Allow all cookies"]',
-            '[aria-label="Allow all cookies"]',
-            'button:has-text("Allow all cookies")',
-            'button:has-text("Accept all")',
-            'button:has-text("Allow essential and optional cookies")',
+            'button[data-cookiebanner="accept_button"]',
+            'button:has-text("Accept All")',
+            'button:has-text("Allow All")',
             '[data-testid="cookie-policy-manage-dialog-accept-button"]',
         ]:
             try:
                 page.click(sel, timeout=2_000)
                 print(f"  FB: Dismissed cookie consent ({sel})")
-                time.sleep(2)
+                time.sleep(1)
                 break
             except Exception:
                 pass
 
-        # Find email field — try multiple selectors in priority order
+        # Mobile email field
         EMAIL_SELECTORS = [
+            '#m_login_email',
             'input[name="email"]',
-            '#email',
             'input[type="email"]',
-            'input[autocomplete="username"]',
         ]
         PASS_SELECTORS = [
             'input[name="pass"]',
-            '#pass',
             'input[type="password"]',
         ]
 
@@ -297,17 +295,22 @@ def _fb_login(page, email: str, password: str) -> bool:
                 continue
 
         if not email_sel:
-            print(f"  FB: Could not find email field. Current URL: {page.url}")
-            print(f"  FB: Page title: {page.title()}")
+            print(f"  FB: Could not find email field. URL={page.url} title='{page.title()}'")
             return False
 
-        page.fill(email_sel, email, timeout=5_000)
+        # Click, clear, then type — more human-like than fill()
+        page.click(email_sel)
+        time.sleep(0.3)
+        page.keyboard.press("Control+a")
+        page.keyboard.type(email, delay=60)
+        print("  FB: Email typed.")
 
         pass_sel = None
         for sel in PASS_SELECTORS:
             try:
                 page.wait_for_selector(sel, timeout=5_000, state="visible")
                 pass_sel = sel
+                print(f"  FB: Found password field via '{sel}'")
                 break
             except Exception:
                 continue
@@ -316,28 +319,41 @@ def _fb_login(page, email: str, password: str) -> bool:
             print("  FB: Could not find password field.")
             return False
 
-        page.fill(pass_sel, password, timeout=5_000)
+        page.click(pass_sel)
+        time.sleep(0.3)
+        page.keyboard.type(password, delay=60)
+        print("  FB: Password typed.")
 
-        # Click the login button
-        for sel in ['[name="login"]', 'button[type="submit"]', 'input[type="submit"]']:
+        # Submit — mobile site uses a plain form submit button
+        submitted = False
+        for sel in ['[name="login"]', 'button[type="submit"]', 'input[type="submit"]',
+                    'button:has-text("Log in")', 'button:has-text("Log In")']:
             try:
                 page.click(sel, timeout=5_000)
+                submitted = True
+                print(f"  FB: Login button clicked via '{sel}'.")
                 break
             except Exception:
                 continue
 
-        # Wait until redirected away from login page
-        page.wait_for_function(
-            "() => !window.location.href.includes('/login')",
-            timeout=30_000,
-        )
-        time.sleep(3)
+        if not submitted:
+            # Last resort: press Enter in the password field
+            page.focus(pass_sel)
+            page.keyboard.press("Enter")
+            submitted = True
+            print("  FB: Login submitted via Enter key.")
 
+        # Wait until redirected away from any /login URL
+        page.wait_for_function(
+            "() => !window.location.href.includes('login')",
+            timeout=35_000,
+        )
+        time.sleep(2)
         print(f"  FB: Post-login URL: {page.url}")
 
-        # Dismiss "Save login info?" / "Not Now" prompt if present
+        # Dismiss "Save login info?" prompt if present
         for sel in ['[aria-label="Not Now"]', 'button:has-text("Not Now")',
-                    'button:has-text("Not now")']:
+                    'a:has-text("Not now")']:
             try:
                 page.click(sel, timeout=3_000)
                 time.sleep(1)
@@ -350,7 +366,10 @@ def _fb_login(page, email: str, password: str) -> bool:
 
     except Exception as e:
         print(f"  FB: Login failed — {e}")
-        print(f"  FB: Current URL at failure: {page.url}")
+        try:
+            print(f"  FB: URL at failure: {page.url}")
+        except Exception:
+            pass
         return False
 
 
@@ -361,24 +380,37 @@ def _scrape_group_posts(page, group_url: str, max_posts: int) -> List[Dict]:
     """
     posts = []
     try:
-        print(f"  FB: Loading {group_url} ...")
-        page.goto(group_url, wait_until="domcontentloaded", timeout=45_000)
+        # Convert desktop group URL to mobile equivalent
+        mobile_url = group_url.replace('www.facebook.com', 'm.facebook.com')
+        print(f"  FB: Loading {mobile_url} ...")
+        page.goto(mobile_url, wait_until="domcontentloaded", timeout=45_000)
         time.sleep(4)
 
         print(f"  FB: Group page URL: {page.url}")
 
         # Check if we got redirected to login (not authenticated)
-        if '/login' in page.url or 'checkpoint' in page.url:
+        if 'login' in page.url or 'checkpoint' in page.url:
             print("  FB: Redirected to login — session not authenticated.")
             return posts
 
-        # Scroll to trigger lazy-loaded posts
-        for _ in range(4):
-            page.keyboard.press("End")
-            time.sleep(2.5)
+        # Scroll to load more posts (mobile site uses infinite scroll)
+        for _ in range(5):
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(2)
 
-        articles = page.query_selector_all('div[role="article"]')
-        print(f"  FB: Found {len(articles)} post articles.")
+        # Mobile Facebook post selectors (try several)
+        articles = []
+        for sel in ['article', 'div[role="article"]', '[data-ft]']:
+            articles = page.query_selector_all(sel)
+            if articles:
+                print(f"  FB: Found {len(articles)} post articles via '{sel}'.")
+                break
+
+        if not articles:
+            print(f"  FB: No articles found. Page title: '{page.title()}'")
+            # Dump a snippet of the page source for debugging
+            body = page.inner_text('body')
+            print(f"  FB: Page snippet: {body[:300]!r}")
 
         for article in articles[:max_posts]:
             try:
@@ -437,6 +469,14 @@ def _scrape_all_groups(max_posts: int) -> List[Dict]:
         print("  FB: Playwright not installed — skipping Facebook monitoring.")
         return []
 
+    # Optional stealth patching — suppresses many headless browser signals
+    try:
+        from playwright_stealth import stealth_sync as _stealth_sync
+        _has_stealth = True
+    except ImportError:
+        _has_stealth = False
+        print("  FB: playwright-stealth not available — running without stealth patches.")
+
     all_posts = []
     try:
         with sync_playwright() as p:
@@ -447,23 +487,29 @@ def _scrape_all_groups(max_posts: int) -> List[Dict]:
                     '--disable-blink-features=AutomationControlled',
                     '--disable-infobars',
                     '--disable-dev-shm-usage',
+                    '--disable-gpu',
                 ],
             )
             ctx = browser.new_context(
+                # Mobile Chrome UA — matches m.facebook.com's expected client
                 user_agent=(
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                    'Mozilla/5.0 (Linux; Android 13; Pixel 7) '
                     'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/124.0.0.0 Safari/537.36'
+                    'Chrome/124.0.6367.82 Mobile Safari/537.36'
                 ),
-                viewport={'width': 1280, 'height': 900},
+                viewport={'width': 412, 'height': 915},
                 locale='en-US',
                 timezone_id='America/New_York',
+                is_mobile=True,
+                has_touch=True,
             )
-            # Mask navigator.webdriver to reduce bot detection
             ctx.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             )
             page = ctx.new_page()
+            if _has_stealth:
+                _stealth_sync(page)
+                print("  FB: Stealth patches applied.")
 
             if not _fb_login(page, email, password):
                 print("  FB: Login failed — aborting Facebook scrape.")
