@@ -661,7 +661,19 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
             print("  No screenshot file found at /tmp/gn_dotd.png â skipping image send")
 
     if not dotd:
-        print("  No DotD found â may not be posted yet or page changed.")
+        print("  No DotD found — may not be posted yet or page changed.")
+        if not use_playwright:
+            # Playwright isn't available in this workflow — send a thum.io
+            # URL-based screenshot so you still see the live page on WhatsApp.
+            thum_url = ("https://image.thum.io/get/noanimate/"
+                        "https://www.gamenerdz.com/deal-of-the-day")
+            print("  Sending thum.io screenshot fallback via WhatsApp...")
+            whatsapp_notifier.send_image_whatsapp(
+                thum_url,
+                "🏪 GameNerdz Deal of the Day\n"
+                "⚠️ Couldn't parse details — here's the live page.\n"
+                f"🔗 {GAMENERDZ_DOTD_URL}"
+            )
         return
 
     deal = research_dotd(dotd)
