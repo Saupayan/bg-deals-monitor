@@ -220,10 +220,12 @@ def format_full_deal(
         lines.append('')
         lines.append('🛒 *BGG Marketplace — current listings (USA):*')
         for c in current_listings[:5]:
-            cond   = c.get('condition', '?')
-            price  = c.get('price', '?')
-            seller = c.get('seller', '')
-            lines.append(f'  • {cond}: {price}' + (f'  (@{seller})' if seller else ''))
+            cond        = c.get('condition', '?')
+            price       = c.get('price', '?')
+            date_listed = c.get('date_listed', '')
+            date_short  = date_listed[:7] if date_listed else ''
+            suffix      = f'  ({date_short})' if date_short else ''
+            lines.append(f'  • {cond}: {price}{suffix}')
     else:
         lines.append('')
         lines.append('🛒 BGG Marketplace: no current USA listings.')
