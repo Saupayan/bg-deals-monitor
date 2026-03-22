@@ -248,119 +248,52 @@ def _format_game_card(game_name: str, rating: float, deal_price: Optional[float]
 
 def _fb_login(page, email: str, password: str) -> bool:
     """
-    Log in via m.facebook.com (mobile site).
-    Mobile Facebook uses plain HTML forms — less JS complexity and less bot-detection
-    than the desktop SPA.  Returns True on success.
+    Log in via mbasic.facebook.com — the true bare-bones HTML Facebook
+    (no JavaScript, no React).  Most scraping-friendly, least bot-detection.
+    Returns True on success.
     """
     try:
-        print("  FB: Navigating to m.facebook.com ...")
-        page.goto("https://m.facebook.com/login/", wait_until="domcontentloaded", timeout=45_000)
-        time.sleep(3)
+        print("  FB: Navigating to mbasic.facebook.com ...")
+        page.goto("https://mbasic.facebook.com", wait_until="domcontentloaded", timeout=45_000)
+        time.sleep(2)
         print(f"  FB: Page URL after load: {page.url}")
 
-        # Dismiss cookie consent if present (mobile also shows it)
-        for sel in [
-            'button[data-cookiebanner="accept_button"]',
-            'button:has-text("Accept All")',
-            'button:has-text("Allow All")',
-            '[data-testid="cookie-policy-manage-dialog-accept-button"]',
-        ]:
-            try:
-                page.click(sel, timeout=2_000)
-                print(f"  FB: Dismissed cookie consent ({sel})")
-                time.sleep(1)
-                break
-            except Exception:
-                pass
+        # mbasic login form — always present on the homepage if not logged in
+        email_sel = 'input[name="email"]'
+        pass_sel  = 'input[name="pass"]'
 
-        # Mobile email field
-        EMAIL_SELECTORS = [
-            '#m_login_email',
-            'input[name="email"]',
-            'input[type="email"]',
-        ]
-        PASS_SELECTORS = [
-            'input[name="pass"]',
-            'input[type="password"]',
-        ]
+        try:
+            page.wait_for_selector(email_sel, timeout=10_000, state="visible")
+        except Exception:
+            print(f"  FB: No email field at mbasic homepage. URL={page.url} title='{page.title()}'")
+            # Try navigating directly to login page
+            page.goto("https://mbasic.facebook.com/login/", wait_until="domcontentloaded", timeout=30_000)
+            time.sleep(2)
+            page.wait_for_selector(email_sel, timeout=10_000, state="visible")
 
-        email_sel = None
-        for sel in EMAIL_SELECTORS:
-            try:
-                page.wait_for_selector(sel, timeout=8_000, state="visible")
-                email_sel = sel
-                print(f"  FB: Found email field via '{sel}'")
-                break
-            except Exception:
-                continue
-
-        if not email_sel:
-            print(f"  FB: Could not find email field. URL={page.url} title='{page.title()}'")
-            return False
-
-        # Click, clear, then type — more human-like than fill()
+        print("  FB: Found email field.")
         page.click(email_sel)
-        time.sleep(0.3)
-        page.keyboard.press("Control+a")
-        page.keyboard.type(email, delay=60)
+        time.sleep(0.2)
+        page.keyboard.type(email, delay=50)
         print("  FB: Email typed.")
 
-        pass_sel = None
-        for sel in PASS_SELECTORS:
-            try:
-                page.wait_for_selector(sel, timeout=5_000, state="visible")
-                pass_sel = sel
-                print(f"  FB: Found password field via '{sel}'")
-                break
-            except Exception:
-                continue
-
-        if not pass_sel:
-            print("  FB: Could not find password field.")
-            return False
-
+        page.wait_for_selector(pass_sel, timeout=5_000, state="visible")
         page.click(pass_sel)
-        time.sleep(0.3)
-        page.keyboard.type(password, delay=60)
+        time.sleep(0.2)
+        page.keyboard.type(password, delay=50)
         print("  FB: Password typed.")
 
-        # Submit — mobile site uses a plain form submit button
-        submitted = False
-        for sel in ['[name="login"]', 'button[type="submit"]', 'input[type="submit"]',
-                    'button:has-text("Log in")', 'button:has-text("Log In")']:
-            try:
-                page.click(sel, timeout=5_000)
-                submitted = True
-                print(f"  FB: Login button clicked via '{sel}'.")
-                break
-            except Exception:
-                continue
+        # mbasic login button is always input[name="login"]
+        page.click('input[name="login"]', timeout=5_000)
+        print("  FB: Login button clicked.")
 
-        if not submitted:
-            # Last resort: press Enter in the password field
-            page.focus(pass_sel)
-            page.keyboard.press("Enter")
-            submitted = True
-            print("  FB: Login submitted via Enter key.")
-
-        # Wait until redirected away from any /login URL
+        # Wait for redirect away from any login/checkpoint page
         page.wait_for_function(
-            "() => !window.location.href.includes('login')",
+            "() => !window.location.href.includes('login') && !window.location.href.includes('checkpoint')",
             timeout=35_000,
         )
         time.sleep(2)
         print(f"  FB: Post-login URL: {page.url}")
-
-        # Dismiss "Save login info?" prompt if present
-        for sel in ['[aria-label="Not Now"]', 'button:has-text("Not Now")',
-                    'a:has-text("Not now")']:
-            try:
-                page.click(sel, timeout=3_000)
-                time.sleep(1)
-                break
-            except Exception:
-                pass
-
         print("  FB: Login successful.")
         return True
 
@@ -380,37 +313,71 @@ def _scrape_group_posts(page, group_url: str, max_posts: int) -> List[Dict]:
     """
     posts = []
     try:
-        # Convert desktop group URL to mobile equivalent
-        mobile_url = group_url.replace('www.facebook.com', 'm.facebook.com')
-        print(f"  FB: Loading {mobile_url} ...")
-        page.goto(mobile_url, wait_until="domcontentloaded", timeout=45_000)
-        time.sleep(4)
+        # Use mbasic — pure HTML, no JS, most scraping-friendly
+        mbasic_url = group_url.replace('www.facebook.com', 'mbasic.facebook.com')
+        print(f"  FB: Loading {mbasic_url} ...")
+        page.goto(mbasic_url, wait_until="domcontentloaded", timeout=45_000)
+        time.sleep(3)
 
         print(f"  FB: Group page URL: {page.url}")
 
-        # Check if we got redirected to login (not authenticated)
+        # Check if redirected to login/checkpoint
         if 'login' in page.url or 'checkpoint' in page.url:
             print("  FB: Redirected to login — session not authenticated.")
             return posts
 
-        # Scroll to load more posts (mobile site uses infinite scroll)
-        for _ in range(5):
-            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            time.sleep(2)
+        # mbasic doesn't need scrolling — load more pages via "See More" links
+        # Collect posts from current page, then follow "See More Posts" links
+        all_articles = []
+        pages_fetched = 0
+        max_pages = 3  # fetch at most 3 pages of posts
 
-        # Mobile Facebook post selectors (try several)
-        articles = []
-        for sel in ['article', 'div[role="article"]', '[data-ft]']:
-            articles = page.query_selector_all(sel)
-            if articles:
-                print(f"  FB: Found {len(articles)} post articles via '{sel}'.")
+        while pages_fetched < max_pages and len(all_articles) < max_posts:
+            # On mbasic, each post story is a <div> inside the feed section.
+            # Posts have links containing "permalink" or "story_fbid".
+            # The most reliable selector is divs that contain a story permalink link.
+            current_articles = page.query_selector_all('div[data-ft]')
+            if not current_articles:
+                # Fallback: any div that contains a story link
+                current_articles = page.query_selector_all('div:has(a[href*="story_fbid"]), div:has(a[href*="permalink"])')
+            print(f"  FB: Page {pages_fetched+1}: found {len(current_articles)} post divs.")
+
+            if not current_articles and pages_fetched == 0:
+                # Nothing found at all — dump page snippet for debugging
+                body = page.inner_text('body')
+                print(f"  FB: Page snippet: {body[:400]!r}")
                 break
 
-        if not articles:
-            print(f"  FB: No articles found. Page title: '{page.title()}'")
-            # Dump a snippet of the page source for debugging
-            body = page.inner_text('body')
-            print(f"  FB: Page snippet: {body[:300]!r}")
+            all_articles.extend(current_articles)
+            pages_fetched += 1
+
+            if len(all_articles) >= max_posts:
+                break
+
+            # Follow "See More Posts" / pagination link if available
+            next_link = None
+            for link_text in ['See More Posts', 'More Posts', 'Next']:
+                try:
+                    next_link = page.query_selector(f'a:has-text("{link_text}")')
+                    if next_link:
+                        break
+                except Exception:
+                    pass
+
+            if not next_link:
+                break
+
+            next_href = next_link.get_attribute('href')
+            if next_href:
+                next_url = f"https://mbasic.facebook.com{next_href}" if next_href.startswith('/') else next_href
+                print(f"  FB: Following pagination: {next_url[:80]}...")
+                page.goto(next_url, wait_until="domcontentloaded", timeout=30_000)
+                time.sleep(2)
+            else:
+                break
+
+        articles = all_articles[:max_posts]
+        print(f"  FB: Total {len(articles)} post divs to process.")
 
         for article in articles[:max_posts]:
             try:
@@ -491,17 +458,15 @@ def _scrape_all_groups(max_posts: int) -> List[Dict]:
                 ],
             )
             ctx = browser.new_context(
-                # Mobile Chrome UA — matches m.facebook.com's expected client
+                # Standard desktop UA — mbasic.facebook.com works fine with this
                 user_agent=(
-                    'Mozilla/5.0 (Linux; Android 13; Pixel 7) '
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                     'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/124.0.6367.82 Mobile Safari/537.36'
+                    'Chrome/124.0.0.0 Safari/537.36'
                 ),
-                viewport={'width': 412, 'height': 915},
+                viewport={'width': 1280, 'height': 900},
                 locale='en-US',
                 timezone_id='America/New_York',
-                is_mobile=True,
-                has_touch=True,
             )
             ctx.add_init_script(
                 "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
