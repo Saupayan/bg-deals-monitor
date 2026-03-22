@@ -34,7 +34,6 @@ from bs4 import BeautifulSoup
 
 import bgg_api
 import marketplace
-import price_checker
 import whatsapp_notifier
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -220,79 +219,43 @@ def fetch_price_drops() -> List[Dict]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# FULL RESEARCH PIPELINE
+# LIGHTWEIGHT RESEARCH PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _research_drop(drop: Dict) -> Optional[Dict]:
+def _research_drop_compact(drop: Dict) -> Optional[Dict]:
     """
-    Full research pipeline for a qualifying BGO price drop:
-      1. BGG lookup (rating/rank/weight/players) — use bgg_rating from BGO as pre-filter,
-         then fetch full details for rank, best players, bgg_url
-      2. BGG marketplace current USA listings
+    Lightweight research for a qualifying BGO price drop.
+    Only fetches what's needed for the compact one-liner format:
+      1. BGG lookup — for best_players, weight, and confirmed rating
+      2. BGG marketplace current USA listings (asking prices)
       3. BGG marketplace recently sold USA prices
-      4. Retail prices across US stores
-      5. Community reviews (positive + negative)
-    Returns an enriched dict, or None if BGG lookup fails entirely.
+    No retail price check, no community reviews.
     """
     game_name = drop['title']
 
-    print(f"  BGO: Looking up '{game_name}' on BGG for full details...")
+    print(f"  BGO: Looking up '{game_name}' on BGG...")
     bgg_id       = bgg_api.search_game(game_name)
     game_details = None
 
     if bgg_id:
         time.sleep(1)
         game_details = bgg_api.get_game_details(bgg_id)
-        if game_details:
-            print(f"  BGO: BGG — Rank: {game_details.get('bgg_rank','N/A')} | "
-                  f"Best: {game_details.get('best_players','?')}p | "
-                  f"Players: {game_details.get('min_players','?')}–{game_details.get('max_players','?')}")
     else:
-        print(f"  BGO: '{game_name}' not found on BGG — will use BGO rating data only.")
+        print(f"  BGO: '{game_name}' not found on BGG — using BGO data only.")
 
-    # BGG marketplace current listings
     current_listings: List[Dict] = []
+    sold_listings: List[Dict] = []
     if bgg_id:
-        print(f"  BGO: Fetching BGG marketplace current listings (USA)...")
         time.sleep(1)
         try:
             current_listings = marketplace.get_current_listings(bgg_id, num_listings=5)
-            print(f"  BGO: Found {len(current_listings)} current listing(s).")
         except Exception as e:
             print(f"  BGO: Current listings error — {e}")
-
-    # BGG marketplace recently sold
-    sold_listings: List[Dict] = []
-    if bgg_id:
-        print(f"  BGO: Fetching BGG marketplace sold listings (USA)...")
         time.sleep(1)
         try:
             sold_listings = marketplace.get_sold_listings(bgg_id, num_listings=5)
-            print(f"  BGO: Found {len(sold_listings)} sold listing(s).")
         except Exception as e:
             print(f"  BGO: Sold listings error — {e}")
-
-    # Retail prices
-    name_for_search = (game_details or {}).get('name', game_name)
-    retail_prices: List[Dict] = []
-    print(f"  BGO: Checking retail prices for '{name_for_search}'...")
-    try:
-        retail_prices = price_checker.get_all_prices(name_for_search, bgg_id or '')
-        print(f"  BGO: Found {len(retail_prices)} retail price(s).")
-    except Exception as e:
-        print(f"  BGO: Retail prices error — {e}")
-
-    # Community reviews
-    reviews: Dict = {'positive': [], 'negative': []}
-    if bgg_id:
-        print(f"  BGO: Fetching community reviews...")
-        time.sleep(1)
-        try:
-            reviews = bgg_api.get_game_reviews(bgg_id)
-            print(f"  BGO: {len(reviews.get('positive',[]))} positive, "
-                  f"{len(reviews.get('negative',[]))} negative review(s).")
-        except Exception as e:
-            print(f"  BGO: Reviews error — {e}")
 
     return {
         **drop,
@@ -300,9 +263,48 @@ def _research_drop(drop: Dict) -> Optional[Dict]:
         'game_details':     game_details,
         'current_listings': current_listings,
         'sold_listings':    sold_listings,
-        'retail_prices':    retail_prices,
-        'reviews':          reviews,
     }
+
+
+def _format_compact_line(r: Dict) -> str:
+    """
+    Format one BGO price drop as a single compact line.
+
+    Format:
+    *Name* — $XX.XX (-YY%) @ Store [badge] | BGG X.X | MinP-MaxPp best@B | wt W.W | Sold: $a,$b,$c | Listed: $x,$y,$z
+    """
+    gd = r.get('game_details') or {}
+
+    name = gd.get('name') or r['title']
+
+    badge = ' 🏆' if r['is_lowest_52w'] else (' 📉' if r['is_lowest_30d'] else '')
+    price_part = f"${r['lowest_price']:.2f} (-{r['discount_pct']:.0f}%) @ {r['store']}{badge}"
+
+    # Use BGG's confirmed rating if available, else fall back to BGO's
+    rating = gd.get('average_rating') or r['bgg_rating']
+    rating_part = f"BGG {float(rating):.1f}"
+
+    # Players
+    min_p  = gd.get('min_players')  or r.get('min_players')  or '?'
+    max_p  = gd.get('max_players')  or r.get('max_players')  or '?'
+    best_p = gd.get('best_players') or '?'
+    players_part = (f"{min_p}p best@{best_p}" if min_p == max_p
+                    else f"{min_p}-{max_p}p best@{best_p}")
+
+    # Weight
+    weight = gd.get('weight') or r.get('bgg_complexity') or 0
+    weight_part = f"wt {float(weight):.1f}" if weight else "wt ?"
+
+    # Sold prices — comma-separated list, price field only
+    sold = r.get('sold_listings', [])
+    sold_part = ('Sold: ' + ', '.join(s['price'] for s in sold)) if sold else 'Sold: —'
+
+    # Listed (for-sale) prices
+    listed = r.get('current_listings', [])
+    listed_part = ('Listed: ' + ', '.join(l['price'] for l in listed)) if listed else 'Listed: —'
+
+    return (f"*{name}* — {price_part} | {rating_part} | {players_part} | "
+            f"{weight_part} | {sold_part} | {listed_part}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -311,8 +313,9 @@ def _research_drop(drop: Dict) -> Optional[Dict]:
 
 def check_bgo_price_drops(force: bool = False) -> None:
     """
-    Fetch BGO daily price drops, filter by BGG rating >= 7.3, and send
-    full-detail WhatsApp alerts for new qualifying deals.
+    Fetch BGO daily price drops, filter by BGG rating >= 7.3, research
+    qualifying NEW drops (lightweight: BGG details + marketplace only),
+    then send ONE combined WhatsApp message with all drops as compact one-liners.
 
     force=True: bypass de-duplication (re-send everything that qualifies).
     force=False: skip games already sent today.
@@ -340,49 +343,42 @@ def check_bgo_price_drops(force: bool = False) -> None:
         print("  BGO: All qualifying drops already sent today.")
         return
 
-    print(f"  BGO: Sending alerts for {len(new_alerts)} new qualifying drop(s).")
+    print(f"  BGO: Researching {len(new_alerts)} new qualifying drop(s)...")
 
+    deal_lines: List[str] = []
     for drop in new_alerts:
         try:
             print(f"\n  BGO: Processing '{drop['title']}' "
-                  f"(BGO rating: {drop['bgg_rating']}, -{drop['discount_pct']:.0f}%)")
+                  f"(BGG {drop['bgg_rating']}, -{drop['discount_pct']:.0f}%)")
 
-            researched = _research_drop(drop)
+            researched = _research_drop_compact(drop)
             if not researched:
                 continue
 
-            # Price line — include badge if applicable
-            badge = ''
-            if drop['is_lowest_52w']:
-                badge = '  🏆 52-week low!'
-            elif drop['is_lowest_30d']:
-                badge = '  📉 30-day low!'
-
-            price_line = (
-                f"🏷 *Now: ${drop['lowest_price']:.2f}*"
-                f"  (was ${drop['was_price']:.2f}, -{drop['discount_pct']:.0f}%){badge}"
-                f"  —  {drop['store']}"
-            )
-
-            msg = whatsapp_notifier.format_full_deal(
-                source_header    = '🎲 *Board Game Oracle — Daily Price Drop*',
-                deal_price_line  = price_line,
-                deal_url         = drop['bgo_url'],
-                game_details     = researched['game_details'],
-                sold_listings    = researched['sold_listings'],
-                current_listings = researched['current_listings'],
-                retail_prices    = researched['retail_prices'],
-                reviews          = researched['reviews'],
-            )
-
-            print(f"  BGO: Sending WhatsApp...")
-            whatsapp_notifier.send_whatsapp(msg)
+            deal_lines.append(_format_compact_line(researched))
 
             if not force:
                 _mark_sent(drop['id'])
 
-            time.sleep(2)
+            time.sleep(1)
 
         except Exception as e:
             print(f"  BGO: Error processing '{drop['title']}': {e}")
             traceback.print_exc()
+
+    if not deal_lines:
+        print("  BGO: Nothing to send after research.")
+        return
+
+    from datetime import datetime as _dt
+    now_str = _dt.now().strftime('%H:%M')
+    n = len(deal_lines)
+    msg = (
+        f"🎲 *Board Game Oracle — Daily Price Drops* "
+        f"({n} new deal{'s' if n != 1 else ''})\n\n"
+        + "\n".join(deal_lines)
+        + f"\n\n_Checked at {now_str}_"
+    )
+
+    print(f"  BGO: Sending combined WhatsApp ({len(msg)} chars, {n} deal(s))...")
+    whatsapp_notifier.send_whatsapp(msg)
