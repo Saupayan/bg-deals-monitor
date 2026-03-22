@@ -18,7 +18,7 @@ SOLD LISTINGS (price history):
 """
 
 from typing import List, Dict
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -67,19 +67,33 @@ def get_current_listings(bgg_id: str, num_listings: int = 5) -> List[Dict]:
         products = data.get('products', [])
         print(f"    Marketplace (forsale): {len(products)} item(s) returned by API")
 
-        # API returns items sorted by most-recently-listed first.
-        # Cap at 20 recent listings to exclude months-old stale listings
-        # (e.g. $9.74 listed Sep 2025 still unsold) before sorting cheapest-first.
-        recent_products = products[:20]
+        # Filter to listings from the last 60 days only.
+        # The API (nosession=1) returns ALL active-flagged listings including
+        # months-old ghost entries that BGG itself marks as "not available"
+        # on the product page (sold/expired but never cleaned up in the API).
+        # Fresh listings (< 60 days old) are almost always genuinely purchaseable.
+        cutoff = datetime.now(timezone.utc) - timedelta(days=60)
 
         listings = []
-        for item in recent_products:
+        for item in products:
             try:
                 price_val = float(item.get('price') or 0)
                 if price_val <= 0:
                     continue
 
-                symbol    = item.get('currencysymbol', '$')
+                # Parse listdate and skip anything older than 60 days
+                raw_date = item.get('listdate', '') or item.get('utclistdate', '')
+                try:
+                    if 'T' in raw_date:
+                        listed_dt = datetime.fromisoformat(raw_date.replace('Z', '+00:00'))
+                    else:
+                        listed_dt = datetime.strptime(raw_date[:19], '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+                    if listed_dt < cutoff:
+                        continue
+                except Exception:
+                    pass  # If date unparseable, include it anyway
+
+                symbol = item.get('currencysymbol', '$')
                 listings.append({
                     'price':       f"{symbol}{price_val:.2f}",
                     'condition':   item.get('prettycondition') or item.get('condition') or 'Unknown',
@@ -93,7 +107,7 @@ def get_current_listings(bgg_id: str, num_listings: int = 5) -> List[Dict]:
         for lst in listings:
             del lst['_price_raw']
 
-        print(f"    Marketplace (forsale): {len(listings)} valid listing(s) after parsing (from {len(recent_products)} most recent)")
+        print(f"    Marketplace (forsale): {len(listings)} listing(s) within last 60 days (from {len(products)} total)")
         return listings[:num_listings]
 
     except requests.exceptions.RequestException as e:
