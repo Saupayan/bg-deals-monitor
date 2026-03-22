@@ -77,6 +77,59 @@ def get_sold_listings(bgg_id: str, num_listings: int = 5) -> List[Dict]:
         return []
 
 
+def get_current_listings(bgg_id: str, num_listings: int = 10) -> List[Dict]:
+    """
+    Return current (unsold, for-sale) BGG Marketplace listings for a game,
+    filtered to US sellers only, sorted cheapest first.
+
+    Each listing dict has:
+      price       - asking price as a string e.g. "$18.00"
+      condition   - "New", "Like New", "Very Good", "Good", "Acceptable", "Poor"
+      seller      - BGG username of the seller
+      notes       - any notes left by the seller (truncated)
+    """
+    url = f"{GEEKDO_BASE}/api/geekmarket"
+    params = {
+        'objectid':   bgg_id,
+        'objecttype': 'thing',
+        'status':     'forsale',
+        'country':    'US',
+        'currency':   'USD',
+        'pageid':     1,
+    }
+
+    try:
+        resp = requests.get(url, params=params, headers=HEADERS, timeout=20)
+
+        if resp.status_code == 200:
+            data = resp.json()
+            listings = _parse_listings(data, num_listings)
+            # Sort by price ascending (cheapest first)
+            def _price_key(l):
+                m = __import__('re').search(r'[\d.]+', l['price'].replace(',', ''))
+                return float(m.group()) if m else 9999
+            listings.sort(key=_price_key)
+            return listings
+
+        elif resp.status_code == 401:
+            headers_no_auth = {k: v for k, v in HEADERS.items() if k != 'Authorization'}
+            resp2 = requests.get(url, params=params, headers=headers_no_auth, timeout=20)
+            if resp2.status_code == 200:
+                listings = _parse_listings(resp2.json(), num_listings)
+                listings.sort(key=lambda l: float(__import__('re').search(r'[\d.]+', l['price'].replace(',', '')).group()) if __import__('re').search(r'[\d.]+', l['price']) else 9999)
+                return listings
+
+        print(f"    ⚠️  Marketplace (forsale) API returned HTTP {resp.status_code}")
+        return []
+
+    except requests.exceptions.RequestException as e:
+        print(f"    ❌ Marketplace (forsale) request error: {e}")
+        return []
+    except Exception as e:
+        print(f"    ❌ Marketplace (forsale) parse error: {e}")
+        return []
+
+
 def _parse_listings(data: dict, limit: int) -> List[Dict]:
     """Parse GeekDo API JSON response for marketplace listings."""
     listings = []

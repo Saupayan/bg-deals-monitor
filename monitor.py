@@ -298,18 +298,26 @@ def _parse_price_float(price_str: str) -> Optional[float]:
 
 def _deal_verdict(deal_price: Optional[float],
                   retail_prices: list,
-                  sold_listings: list) -> str:
+                  sold_listings: list,
+                  current_listings: list = None) -> str:
     """
-    Return a short verdict emoji + label comparing the deal price to retail
-    and recent BGG sold prices.
+    Return a short verdict emoji + label comparing the deal price to retail,
+    recent BGG sold prices, and current BGG for-sale listings.
 
-    Tiers (all comparisons vs cheapest in-stock retail):
-      🔥 Steal    — deal is ≥30% below cheapest retail
-      ✅ Good     — deal is ≥15% below cheapest retail
-      😐 Fair     — deal is within 15% of cheapest retail (either way)
-      🤔 Pricey   — deal is ≥15% above cheapest retail (cheaper online)
+    Priority of comparison baseline (best data wins):
+      1. Cheapest in-stock retail price
+      2. Cheapest current BGG listing (if no retail data)
+      3. Average recent BGG sold price (last resort)
+
+    Tiers:
+      🔥 Steal    — deal is ≥30% below baseline
+      ✅ Good     — deal is ≥15% below baseline
+      😐 Fair     — deal is within ±15% of baseline
+      🤔 Pricey   — deal is ≥15% above baseline
       ❓ No data  — not enough price info to call it
     """
+    if current_listings is None:
+        current_listings = []
     if deal_price is None:
         return "❓ No price in post"
 
@@ -319,7 +327,21 @@ def _deal_verdict(deal_price: Optional[float],
         in_stock = retail_prices  # fall back to any price if nothing in stock
 
     if not in_stock:
-        # No retail data — try to use sold prices as baseline
+        # No retail data — try cheapest current BGG listing as baseline
+        cur_floats = [_parse_price_float(s['price']) for s in current_listings]
+        cur_floats = [p for p in cur_floats if p]
+        if cur_floats:
+            cheapest_listed = min(cur_floats)
+            ratio = deal_price / cheapest_listed
+            if ratio <= 0.70:
+                return f"🔥 Steal — {int((1 - ratio)*100)}% below cheapest BGG listing"
+            if ratio <= 0.85:
+                return f"✅ Good — {int((1 - ratio)*100)}% below cheapest BGG listing"
+            if ratio <= 1.15:
+                return f"😐 Fair — near cheapest BGG listing (${cheapest_listed:.2f})"
+            return f"🤔 Pricey — others listing at ${cheapest_listed:.2f} on BGG"
+
+        # Last resort: average recent sold price
         sold_floats = [_parse_price_float(s['price']) for s in sold_listings]
         sold_floats = [p for p in sold_floats if p]
         if not sold_floats:
@@ -347,7 +369,8 @@ def _deal_verdict(deal_price: Optional[float],
 
 
 def _format_deal_card(thread: dict, game_name: str,
-                       retail_prices: list, sold_listings: list) -> list:
+                       retail_prices: list, sold_listings: list,
+                       current_listings: list = None) -> list:
     """
     Build the lines for one deal's WhatsApp card.
 
@@ -357,8 +380,11 @@ def _format_deal_card(thread: dict, game_name: str,
     because running the full pipeline on 5–6 games per thread would be too slow.
 
     For single-game threads, a full card with retail/sold/verdict is built.
+    current_listings: current (unsold) BGG Marketplace for-sale listings.
     Returns a list of strings (one per line).
     """
+    if current_listings is None:
+        current_listings = []
     active = is_active_deal(thread['subject'])
     status = "🟢" if active else "🔴"
 
@@ -411,6 +437,19 @@ def _format_deal_card(thread: dict, game_name: str,
     else:
         lines.append(f"  🏪 Retail: no data")
 
+    # BGG Marketplace current listings (for sale right now, US only)
+    current_floats = [_parse_price_float(s['price']) for s in current_listings]
+    current_floats = [p for p in current_floats if p]
+    if current_floats:
+        lo_c, hi_c = min(current_floats), max(current_floats)
+        n_c = len(current_floats)
+        if lo_c == hi_c:
+            lines.append(f"  🏷️ BGG listed: ${lo_c:.2f} ({n_c} cop{'ies' if n_c != 1 else 'y'})")
+        else:
+            lines.append(f"  🏷️ BGG listed: ${lo_c:.2f}–${hi_c:.2f} ({n_c} cop{'ies' if n_c != 1 else 'y'})")
+    else:
+        lines.append(f"  🏷️ BGG listed: none for sale")
+
     # BGG Marketplace sold listings
     sold_floats = [_parse_price_float(s['price']) for s in sold_listings]
     sold_floats = [p for p in sold_floats if p]
@@ -425,7 +464,7 @@ def _format_deal_card(thread: dict, game_name: str,
         lines.append(f"  📦 BGG sold: no recent data")
 
     # Verdict
-    verdict = _deal_verdict(deal_price, retail_prices, sold_listings)
+    verdict = _deal_verdict(deal_price, retail_prices, sold_listings, current_listings)
     lines.append(f"  {verdict}")
 
     if thread_url:
@@ -513,17 +552,20 @@ def run_force_mode() -> None:
         except Exception as e:
             print(f"    Price check error: {e}")
 
-        # BGG Marketplace sold listings (needs BGG ID)
+        # BGG Marketplace sold + current listings (both need BGG ID)
+        current_listings = []
         try:
             bgg_id = bgg_api.search_game(game_name)
             if bgg_id:
                 time.sleep(0.5)
                 sold_listings = marketplace.get_sold_listings(bgg_id, num_listings=5)
+                time.sleep(0.5)
+                current_listings = marketplace.get_current_listings(bgg_id, num_listings=10)
         except Exception as e:
             print(f"    Marketplace error: {e}")
 
         deal_cards[thread['id']] = _format_deal_card(
-            thread, game_name, retail_prices, sold_listings
+            thread, game_name, retail_prices, sold_listings, current_listings
         )
         time.sleep(1)  # be polite between deals
 
