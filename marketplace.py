@@ -67,8 +67,13 @@ def get_current_listings(bgg_id: str, num_listings: int = 5) -> List[Dict]:
         products = data.get('products', [])
         print(f"    Marketplace (forsale): {len(products)} item(s) returned by API")
 
+        # API returns items sorted by most-recently-listed first.
+        # Cap at 20 recent listings to exclude months-old stale listings
+        # (e.g. $9.74 listed Sep 2025 still unsold) before sorting cheapest-first.
+        recent_products = products[:20]
+
         listings = []
-        for item in products:
+        for item in recent_products:
             try:
                 price_val = float(item.get('price') or 0)
                 if price_val <= 0:
@@ -88,7 +93,7 @@ def get_current_listings(bgg_id: str, num_listings: int = 5) -> List[Dict]:
         for lst in listings:
             del lst['_price_raw']
 
-        print(f"    Marketplace (forsale): {len(listings)} valid listing(s) after parsing")
+        print(f"    Marketplace (forsale): {len(listings)} valid listing(s) after parsing (from {len(recent_products)} most recent)")
         return listings[:num_listings]
 
     except requests.exceptions.RequestException as e:
