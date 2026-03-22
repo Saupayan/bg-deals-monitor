@@ -254,11 +254,13 @@ def _make_session() -> "requests.Session":
     """
     import requests as _req
     s = _req.Session()
+    # mbasic.facebook.com requires a basic/mobile UA — desktop Chrome triggers
+    # a "browser not supported" wall on group pages even when authenticated.
+    # An old Android Firefox UA gets plain HTML group content without issues.
     s.headers.update({
         'User-Agent': (
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-            'AppleWebKit/537.36 (KHTML, like Gecko) '
-            'Chrome/124.0.0.0 Safari/537.36'
+            'Mozilla/5.0 (Android 5.0; Mobile; rv:41.0) '
+            'Gecko/41.0 Firefox/41.0'
         ),
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
