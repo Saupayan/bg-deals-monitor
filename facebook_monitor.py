@@ -507,12 +507,16 @@ def _scrape_all_groups_playwright(cookies_json: str, max_posts: int) -> List[Dic
                       '--disable-blink-features=AutomationControlled'],
             )
             context = browser.new_context(
-                # Mobile Chrome UA — mbasic serves plain HTML to this
+                # Old Android WebKit UA — mbasic serves plain HTML directly
+                # without redirecting to m.facebook.com.
+                # Mobile Chrome and modern UAs cause mbasic → m.facebook.com
+                # redirect which then shows "This browser isn't supported".
                 user_agent=(
-                    'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 '
-                    '(KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'
+                    'Mozilla/5.0 (Linux; U; Android 2.3.3; en-us; '
+                    'HTC_DesireS_S510e Build/GRI40) AppleWebKit/533.1 '
+                    '(KHTML, like Gecko) Version/4.0 Mobile Safari/533.1'
                 ),
-                viewport={'width': 412, 'height': 915},
+                viewport={'width': 320, 'height': 480},
             )
             context.add_cookies(pw_cookies)
 
