@@ -23,6 +23,7 @@ jobs:
             seen_threads.json
             gamenerdz_sent.txt
             bgo_sent.json
+            ttm_sent.json
           key: monitor-state-latest
           restore-keys: |
             monitor-state-
@@ -62,4 +63,5 @@ jobs:
             seen_threads.json
             gamenerdz_sent.txt
             bgo_sent.json
+            ttm_sent.json
           key: monitor-state-latest

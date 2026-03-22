@@ -159,6 +159,118 @@ def send_deal_whatsapp(deals: list) -> bool:
     return send_whatsapp(message)
 
 
+def format_full_deal(
+    source_header: str,
+    deal_price_line: str,
+    deal_url: str,
+    game_details: dict,
+    sold_listings: list,
+    current_listings: list,
+    retail_prices: list,
+    reviews: dict,
+) -> str:
+    """
+    Build a full-detail WhatsApp message for any deal source (TTM, BGO, GameNerdz, etc.).
+
+    Includes:
+      - Source header + deal price line
+      - BGG stats: rating, ranking, weight, player range, best player count
+      - BGG marketplace: current USA listings (cheapest first)
+      - BGG marketplace: recently sold USA prices
+      - Retail store prices
+      - 1 positive + 1 negative community review
+    """
+    game    = game_details or {}
+    name    = game.get('name', 'Unknown')
+    rating  = game.get('average_rating', 'N/A')
+    weight  = game.get('weight', 'N/A')
+    best_at = game.get('best_players', '')
+    bgg_rank = game.get('bgg_rank', '')
+    bgg_url  = game.get('bgg_url', '')
+    min_p    = game.get('min_players', '')
+    max_p    = game.get('max_players', '')
+
+    # Player range string
+    if min_p and max_p and min_p != max_p:
+        player_range = f"{min_p}–{max_p}"
+    elif min_p:
+        player_range = str(min_p)
+    else:
+        player_range = ''
+
+    rank_str   = f"  |  🏆 Rank: {bgg_rank}" if bgg_rank and bgg_rank != 'Not ranked' else ''
+    best_str   = f"  |  👥 Best: {best_at}p" if best_at else ''
+    range_str  = f"  ({player_range}p range)" if player_range else ''
+
+    lines = [
+        source_header,
+        '',
+        f'*{name}*',
+        f'⭐ BGG: {rating}/10  |  📊 Weight: {weight}/5{best_str}{range_str}{rank_str}',
+        '',
+        deal_price_line,
+    ]
+    if deal_url:
+        lines.append(f'🔗 {deal_url}')
+    if bgg_url:
+        lines.append(f'📋 BGG: {bgg_url}')
+
+    # Current BGG marketplace listings (for sale, USA, cheapest first)
+    if current_listings:
+        lines.append('')
+        lines.append('🛒 *BGG Marketplace — current listings (USA):*')
+        for c in current_listings[:5]:
+            cond   = c.get('condition', '?')
+            price  = c.get('price', '?')
+            seller = c.get('seller', '')
+            lines.append(f'  • {cond}: {price}' + (f'  (@{seller})' if seller else ''))
+    else:
+        lines.append('')
+        lines.append('🛒 BGG Marketplace: no current USA listings.')
+
+    # Recently sold BGG marketplace listings
+    if sold_listings:
+        lines.append('')
+        lines.append('💸 *BGG Marketplace — recently sold (USA):*')
+        for s in sold_listings[:5]:
+            cond  = s.get('condition', '?')
+            price = s.get('price', '?')
+            d     = s.get('date') or s.get('date_sold', '')
+            date_short = d[:7] if d else ''
+            lines.append(f'  • {cond}: {price}' + (f'  ({date_short})' if date_short else ''))
+    else:
+        lines.append('')
+        lines.append('💸 BGG Marketplace: no recent USA sold listings.')
+
+    # Retail store prices
+    if retail_prices:
+        lines.append('')
+        lines.append('🏬 *Retail prices (USA):*')
+        for p in retail_prices[:6]:
+            lines.append(f'  • {p["store"]}: {p["price_str"]}')
+    else:
+        lines.append('')
+        lines.append('🏬 No retail prices found.')
+
+    # Community reviews — 1 positive, 1 negative
+    pos = (reviews or {}).get('positive') or []
+    neg = (reviews or {}).get('negative') or []
+    if pos or neg:
+        lines.append('')
+    if pos:
+        r       = pos[0]
+        rtag    = f' ({r["rating"]:.1f})' if r.get('rating') else ''
+        snippet = r['text'][:160].rstrip() + ('…' if len(r['text']) > 160 else '')
+        lines.append(f'👍 "{snippet}" — {r["user"]}{rtag}')
+    if neg:
+        r       = neg[0]
+        rtag    = f' ({r["rating"]:.1f})' if r.get('rating') else ''
+        snippet = r['text'][:160].rstrip() + ('…' if len(r['text']) > 160 else '')
+        lines.append(f'👎 "{snippet}" — {r["user"]}{rtag}')
+
+    return '\n'.join(lines)
+
+
 def send_dotd_whatsapp(deal: dict) -> bool:
     """
     Send a compact WhatsApp alert for a GameNerdz Deal of the Day.

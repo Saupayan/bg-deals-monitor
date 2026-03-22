@@ -51,6 +51,7 @@ import emailer
 import whatsapp_notifier
 import gamenerdz_dotd
 import bgo_pricedrop
+import ttm_dotd
 from game_parser import extract_game_name, is_active_deal, extract_deal_price, extract_multi_game_deals
 
 
@@ -257,6 +258,13 @@ def check_for_new_deals(first_run: bool = False) -> None:
         bgo_pricedrop.check_bgo_price_drops(force=False)
     except Exception as e:
         print(f"\n  BGO price drop check error: {e}")
+        traceback.print_exc()
+
+    # Tabletop Merchant Deal of the Day — dedup guard in ttm_sent.json
+    try:
+        ttm_dotd.check_ttm_dotd(force=False)
+    except Exception as e:
+        print(f"\n  Tabletop Merchant DotD check error: {e}")
         traceback.print_exc()
 
 
@@ -610,6 +618,14 @@ def run_force_mode() -> None:
         bgo_pricedrop.check_bgo_price_drops(force=True)
     except Exception as e:
         print(f"  BGO price drop error: {e}")
+        traceback.print_exc()
+
+    # Tabletop Merchant DotD — force=True bypasses dedup
+    print("\n  Checking Tabletop Merchant Deal of the Day...")
+    try:
+        ttm_dotd.check_ttm_dotd(force=True)
+    except Exception as e:
+        print(f"  Tabletop Merchant DotD error: {e}")
         traceback.print_exc()
 
 

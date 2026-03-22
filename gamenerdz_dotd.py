@@ -559,7 +559,18 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     else:
         print(f"  Not found on BGG. Will include with limited info.")
 
-    # Step 2: BGG Marketplace sold listings
+    # Step 2: BGG Marketplace current listings (for sale, USA)
+    current_listings = []
+    if bgg_id:
+        print(f"  Fetching BGG marketplace current listings (USA)...")
+        time.sleep(1)
+        try:
+            current_listings = marketplace.get_current_listings(bgg_id, num_listings=5)
+            print(f"  Found {len(current_listings)} current listing(s)")
+        except Exception as e:
+            print(f"  Current listings error: {e}")
+
+    # Step 3: BGG Marketplace sold listings
     sold_listings = []
     if bgg_id:
         print(f"  Fetching BGG marketplace sold listings (USA)...")
@@ -567,7 +578,7 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
         sold_listings = marketplace.get_sold_listings(bgg_id, num_listings=5)
         print(f"  Found {len(sold_listings)} sold listing(s)")
 
-    # Step 3: Retail prices from other stores
+    # Step 5: Retail prices from other stores
     name_for_search = (game_details or {}).get('name', game_name)
     print(f"  Checking retail prices for '{name_for_search}'...")
     retail_prices = []
@@ -581,7 +592,7 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     except Exception as e:
         print(f"  Price check error: {e}")
 
-    # Step 4: BGG reviews
+    # Step 6: BGG reviews
     reviews = {'positive': [], 'negative': []}
     if bgg_id:
         print(f"  Fetching community reviews...")
@@ -597,19 +608,20 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     thread = {
         'id':       '',           # no BGG thread ID for DotD
         'deal_url': dotd['url'],  # actual GameNerdz product page
-        'subject':  f"GameNerdz Deal of the Day: {raw_name} â {dotd['price_str']}",
+        'subject':  f"GameNerdz Deal of the Day: {raw_name} — {dotd['price_str']}",
         'author':   'GameNerdz',
         'post_date': '',
     }
 
     return dict(
-        thread        = thread,
-        game_details  = game_details,
-        sold_listings = sold_listings,
-        retail_prices = retail_prices,
-        reviews       = reviews,
-        dotd_price    = dotd['price_str'],
-        dotd_url      = dotd['url'],
+        thread            = thread,
+        game_details      = game_details,
+        current_listings  = current_listings,
+        sold_listings     = sold_listings,
+        retail_prices     = retail_prices,
+        reviews           = reviews,
+        dotd_price        = dotd['price_str'],
+        dotd_url          = dotd['url'],
     )
 
 
@@ -683,8 +695,21 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
 
     print(f"\n  Sending GameNerdz DotD alert for '{dotd['name']}'...")
     sent = emailer.send_consolidated_alert([deal])
+
+    # WhatsApp — full-detail message with all research fields
+    price_line = f"🏷 *GameNerdz: {deal['dotd_price']}*"
+    msg = whatsapp_notifier.format_full_deal(
+        source_header    = '🎪 *GameNerdz Deal of the Day*',
+        deal_price_line  = price_line,
+        deal_url         = deal['dotd_url'],
+        game_details     = deal['game_details'],
+        sold_listings    = deal.get('sold_listings', []),
+        current_listings = deal.get('current_listings', []),
+        retail_prices    = deal.get('retail_prices', []),
+        reviews          = deal.get('reviews', {}),
+    )
     print(f"  Sending WhatsApp alert...")
-    whatsapp_notifier.send_deal_whatsapp([deal])
+    whatsapp_notifier.send_whatsapp(msg)
 
     if sent and not force:
         _mark_sent_today()
