@@ -506,6 +506,20 @@ def run_force_mode() -> None:
     now_str = datetime.now().strftime('%H:%M')
     print(f"\n=== FORCE / MANUAL TRIGGER @ {now_str} — deals from the last 7 days ===\n")
 
+    def _thread_is_relevant(t: dict) -> bool:
+        """
+        A thread is relevant for force mode if:
+          - It was originally posted within the last 7 days, OR
+          - It had a reply/update within the last 24 hours (bumped old deal).
+        BGG sorts the forum by last-activity date, so bumped old threads
+        (e.g. Pi day deals, old preorders with new replies) appear under
+        'Today' in the BGG UI but have a post_date older than 7 days.
+        """
+        return (
+            _is_within_hours(t['post_date'], hours=7 * 24)
+            or _is_within_hours(t.get('last_post_date', ''), hours=24)
+        )
+
     # ── 1. Fetch up to 3 pages ────────────────────────────────────────────────
     all_threads: List[Dict] = []
     for page in range(1, 4):
@@ -514,21 +528,27 @@ def run_force_mode() -> None:
         if not page_threads:
             print(f"  Page {page} returned nothing — stopping.")
             break
-        page_has_recent = any(_is_within_hours(t['post_date'], hours=7 * 24)
-                               for t in page_threads)
+        page_has_recent = any(_thread_is_relevant(t) for t in page_threads)
         all_threads.extend(page_threads)
         if not page_has_recent:
-            print(f"  Page {page}: all threads older than 7 days — done fetching.")
+            print(f"  Page {page}: no relevant threads — done fetching.")
             break
         time.sleep(1)
 
-    # ── 2. Filter to 7 days, sort newest first ────────────────────────────────
+    # ── 2. Filter + sort: newest last-activity first ──────────────────────────
     week_deals = [
         t for t in all_threads
         if t['subject'].lower().strip() not in SKIP_SUBJECTS
-        and _is_within_hours(t['post_date'], hours=7 * 24)
+        and _thread_is_relevant(t)
     ]
-    week_deals.sort(key=lambda t: _parse_thread_date(t['post_date']), reverse=True)
+    # Sort by the most recent activity (last reply or original post), newest first
+    week_deals.sort(
+        key=lambda t: max(
+            _parse_thread_date(t['post_date']),
+            _parse_thread_date(t.get('last_post_date', '')),
+        ),
+        reverse=True,
+    )
 
     live_deals  = [t for t in week_deals if is_active_deal(t['subject'])]
     dead_deals  = [t for t in week_deals if not is_active_deal(t['subject'])]
