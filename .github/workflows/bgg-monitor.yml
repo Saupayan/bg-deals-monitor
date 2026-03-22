@@ -51,6 +51,7 @@ jobs:
           WHATSAPP_PHONE:         ${{ secrets.WHATSAPP_PHONE }}
           FB_EMAIL:               ${{ secrets.FB_EMAIL }}
           FB_PASSWORD:            ${{ secrets.FB_PASSWORD }}
+          FB_COOKIES:             ${{ secrets.FB_COOKIES }}
           CHECK_INTERVAL_MINUTES: '60'
         run: |
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then

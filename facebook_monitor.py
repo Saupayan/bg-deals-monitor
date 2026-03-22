@@ -247,7 +247,11 @@ def _format_game_card(game_name: str, rating: float, deal_price: Optional[float]
 # ─── Facebook scraping via Playwright ────────────────────────────────────────
 
 def _make_session() -> "requests.Session":
-    """Create a requests Session with a realistic browser User-Agent."""
+    """
+    Create an authenticated requests Session using browser cookies from the
+    FB_COOKIES environment variable (JSON array exported from Cookie-Editor).
+    Falls back to email/password login if FB_COOKIES is not set.
+    """
     import requests as _req
     s = _req.Session()
     s.headers.update({
@@ -259,60 +263,87 @@ def _make_session() -> "requests.Session":
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
     })
+
+    cookies_json = os.getenv('FB_COOKIES', '')
+    if cookies_json:
+        try:
+            cookies = json.loads(cookies_json)
+            imported = 0
+            for c in cookies:
+                name = c.get('name') or c.get('Name')
+                value = c.get('value') or c.get('Value', '')
+                domain = c.get('domain') or c.get('Domain', '.facebook.com')
+                if name and value:
+                    s.cookies.set(name, value, domain=domain)
+                    imported += 1
+            print(f"  FB: Loaded {imported} cookies from FB_COOKIES secret.")
+        except Exception as e:
+            print(f"  FB: Failed to parse FB_COOKIES — {e}")
+
     return s
 
 
 def _fb_login_requests(session, email: str, password: str) -> bool:
     """
-    Log in to mbasic.facebook.com using plain HTTP requests + BeautifulSoup.
-    mbasic is Facebook's zero-JS HTML site — designed for basic HTTP clients,
-    so no browser / bot-detection applies here.
-    Returns True on success.
+    Verify the session is authenticated by checking mbasic.facebook.com.
+    If FB_COOKIES was loaded, we should already be logged in.
+    Falls back to form-based login using email/password if needed.
+    Returns True if authenticated.
     """
     from bs4 import BeautifulSoup
 
     try:
-        print("  FB: Fetching mbasic.facebook.com login page ...")
+        print("  FB: Checking authentication on mbasic.facebook.com ...")
         r = session.get('https://mbasic.facebook.com', timeout=30)
         r.raise_for_status()
-        print(f"  FB: Login page status {r.status_code}, URL: {r.url}")
+        print(f"  FB: Status {r.status_code}, URL: {r.url}")
+
+        # If we're not on a login page, cookies worked
+        if 'login' not in r.url and 'checkpoint' not in r.url:
+            soup = BeautifulSoup(r.text, 'html.parser')
+            form = soup.find('form', id='login_form')
+            if not form:
+                print("  FB: Already authenticated via cookies.")
+                return True
+
+        # Cookie auth didn't work — fall back to form login
+        print("  FB: Cookie auth failed or not set — attempting form login ...")
+        if not email or not password:
+            print("  FB: No email/password to fall back to.")
+            return False
 
         soup = BeautifulSoup(r.text, 'html.parser')
         form = soup.find('form', id='login_form') or soup.find('form')
         if not form:
-            print("  FB: No login form found on mbasic homepage.")
-            print(f"  FB: Page snippet: {soup.get_text()[:300]!r}")
+            print(f"  FB: No login form found. Page: {soup.get_text()[:200]!r}")
             return False
 
         action = form.get('action', '/login/device-based/regular/login/')
         if action.startswith('/'):
             action = 'https://mbasic.facebook.com' + action
 
-        # Collect all hidden form fields
         data: Dict[str, str] = {}
         for inp in form.find_all('input'):
             name = inp.get('name')
             if name:
                 data[name] = inp.get('value', '')
-
         data['email'] = email
         data['pass']  = password
-        print(f"  FB: Submitting login to {action} ...")
 
+        print(f"  FB: POSTing credentials to {action} ...")
         r2 = session.post(action, data=data, timeout=30)
         print(f"  FB: Post-login status {r2.status_code}, URL: {r2.url}")
 
-        # Success: redirected away from login/
         if 'login' in r2.url or 'checkpoint' in r2.url:
             soup2 = BeautifulSoup(r2.text, 'html.parser')
-            print(f"  FB: Still on login/checkpoint. Page snippet: {soup2.get_text()[:200]!r}")
+            print(f"  FB: Still on login/checkpoint: {soup2.get_text()[:200]!r}")
             return False
 
-        print("  FB: Login successful.")
+        print("  FB: Form login successful.")
         return True
 
     except Exception as e:
-        print(f"  FB: Login error — {e}")
+        print(f"  FB: Auth error — {e}")
         traceback.print_exc()
         return False
 
