@@ -50,6 +50,7 @@ import price_checker
 import emailer
 import whatsapp_notifier
 import gamenerdz_dotd
+import bgo_pricedrop
 from game_parser import extract_game_name, is_active_deal, extract_deal_price, extract_multi_game_deals
 
 
@@ -249,6 +250,13 @@ def check_for_new_deals(first_run: bool = False) -> None:
         gamenerdz_dotd.check_gamenerdz_dotd(force=False, use_playwright=False)
     except Exception as e:
         print(f"\n  GameNerdz DotD check error: {e}")
+        traceback.print_exc()
+
+    # BGO daily price drops — dedup guard in bgo_sent.json (sends once per game per day)
+    try:
+        bgo_pricedrop.check_bgo_price_drops(force=False)
+    except Exception as e:
+        print(f"\n  BGO price drop check error: {e}")
         traceback.print_exc()
 
 
@@ -594,6 +602,14 @@ def run_force_mode() -> None:
         gamenerdz_dotd.check_gamenerdz_dotd(force=True, use_playwright=False)
     except Exception as e:
         print(f"  GameNerdz DotD error: {e}")
+        traceback.print_exc()
+
+    # BGO daily price drops — force=True re-sends all qualifying deals right now
+    print("\n  Checking BGO Daily Price Drops...")
+    try:
+        bgo_pricedrop.check_bgo_price_drops(force=True)
+    except Exception as e:
+        print(f"  BGO price drop error: {e}")
         traceback.print_exc()
 
 
