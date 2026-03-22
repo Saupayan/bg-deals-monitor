@@ -23,9 +23,10 @@ First run behaviour:
 Usage:
   python monitor.py            -- run normally (loops forever, checks every 15 min)
   python monitor.py --once      -- run one check then exit (used by GitHub Actions scheduled/manual)
-  python monitor.py --force     -- send ALL deals from last 24h right now, skip seen filter
-                                   + today's GameNerdz DotD (used by WhatsApp manual trigger)
-  python monitor.py --test      -- same as --force (alias for local development)
+  python monitor.py --force     -- send compact WhatsApp list of ALL live deals from the last
+                                   7 days (used by WhatsApp manual trigger via repository_dispatch)
+                                   No email. No seen_threads.json changes.
+  python monitor.py --test      -- full research pipeline on last 24h deals (local dev)
   python monitor.py --heartbeat -- send compact "monitor alive" WhatsApp with live deal list
                                    (used by hourly GitHub Actions heartbeat job)
 """
@@ -274,16 +275,94 @@ def _process_and_send_bgg(threads_to_process: list, seen: Set[str]) -> None:
 
 
 # -----------------------------------------------------------------------------
-# TEST MODE  (--force / --test)
+# FORCE MODE  (--force)  — WhatsApp manual trigger
+# -----------------------------------------------------------------------------
+
+def run_force_mode() -> None:
+    """
+    Triggered when the user sends the WhatsApp trigger word.
+    Sends a compact WhatsApp list of every LIVE deal posted in the last 7 days.
+
+    - Fetches up to 3 pages from BGG Hot Deals (stops early once all threads are > 7 days old)
+    - Filters: within last 7 days AND still active (not DEAD / Sold Out / Expired)
+    - Sends ONE compact WhatsApp message — no email, no full research pipeline
+    - Does NOT update seen_threads.json — scheduled runs continue unaffected
+    """
+    now_str = datetime.now().strftime('%H:%M')
+    print(f"\n=== FORCE / MANUAL TRIGGER @ {now_str} — live deals from the last 7 days ===\n")
+
+    all_threads: List[Dict] = []
+    for page in range(1, 4):  # pages 1–3 — enough to cover a full week
+        print(f"  Fetching BGG Hot Deals page {page}...")
+        page_threads = bgg_api.get_forum_threads(forum_id=config.BGG_FORUM_ID, page=page)
+        if not page_threads:
+            print(f"  Page {page} returned nothing — stopping.")
+            break
+
+        # Stop fetching more pages once every thread on the page is older than 7 days
+        page_has_recent = any(_is_within_hours(t['post_date'], hours=7 * 24)
+                               for t in page_threads)
+        all_threads.extend(page_threads)
+
+        if not page_has_recent:
+            print(f"  Page {page}: all threads older than 7 days — no need for more pages.")
+            break
+        time.sleep(1)  # be polite to BGG between page requests
+
+    # Filter: within 7 days, not a pinned post, and still active
+    live_deals = [
+        t for t in all_threads
+        if t['subject'].lower().strip() not in SKIP_SUBJECTS
+        and _is_within_hours(t['post_date'], hours=7 * 24)
+        and is_active_deal(t['subject'])
+    ]
+
+    # Sort newest → oldest
+    live_deals.sort(key=lambda t: _parse_thread_date(t['post_date']), reverse=True)
+
+    print(f"\n  Found {len(live_deals)} live deal(s) from the last 7 days.")
+
+    # Build compact WhatsApp message
+    if not live_deals:
+        msg = (
+            f"🎲 *BGG Hot Deals — live deals (last 7 days)*\n\n"
+            f"No active deals found right now.\n\n"
+            f"_Checked at {now_str}_"
+        )
+    else:
+        lines = [f"🎲 *BGG Hot Deals — {len(live_deals)} live deal(s)*", ""]
+        for t in live_deals:
+            game_name = extract_game_name(t['subject']) or t['subject']
+            thread_url = (f"https://boardgamegeek.com/thread/{t['id']}"
+                          if t.get('id') else '')
+            try:
+                age_h = int((datetime.now(timezone.utc) - _parse_thread_date(t['post_date']))
+                            .total_seconds() / 3600)
+                age_str = f"{age_h}h ago" if age_h < 48 else f"{age_h // 24}d ago"
+            except Exception:
+                age_str = ""
+            lines.append(f"• *{game_name}* ({age_str})")
+            if thread_url:
+                lines.append(f"  {thread_url}")
+        lines.append("")
+        lines.append(f"_Checked at {now_str}_")
+        msg = "\n".join(lines)
+
+    print(msg)
+    whatsapp_notifier.send_whatsapp(msg)
+
+
+# -----------------------------------------------------------------------------
+# TEST MODE  (--test)  — local development / full research
 # -----------------------------------------------------------------------------
 
 def run_test_mode() -> None:
     """
     Process all deals posted in the last 24 hours right now, plus today's
     GameNerdz Deal of the Day. Does NOT update seen_threads.json.
-    Used by both --test (local dev) and --force (WhatsApp manual trigger).
+    Used by --test for local development (runs the full research pipeline).
     """
-    mode = "FORCE / MANUAL TRIGGER" if '--force' in sys.argv else "TEST"
+    mode = "TEST"
     print(f"\n=== {mode} â sending all deals from the last 24 hours ===\n")
 
     threads = bgg_api.get_forum_threads(forum_id=config.BGG_FORUM_ID, page=1)
@@ -423,10 +502,16 @@ if __name__ == '__main__':
         run_heartbeat_mode()
         sys.exit(0)
 
-    # --force: send all deals from last 24h regardless of seen state
+    # --force: compact WhatsApp list of all live deals from the last 7 days.
     # Used by the WhatsApp manual trigger (repository_dispatch).
-    # Does NOT update seen_threads.json â scheduled runs continue unaffected.
-    if '--force' in sys.argv or '--test' in sys.argv:
+    if '--force' in sys.argv:
+        # WhatsApp manual trigger: compact list of all live deals from the last 7 days.
+        # No email, no full research, no seen_threads.json changes.
+        run_force_mode()
+        sys.exit(0)
+
+    if '--test' in sys.argv:
+        # Local dev: full research pipeline on the last 24h of deals.
         run_test_mode()
         sys.exit(0)
 
