@@ -689,9 +689,10 @@ def run_test_mode() -> None:
             # thum.io is a free screenshot-as-a-service — no API key needed.
             # This runs even in the main bgg-monitor.yml workflow where Playwright
             # is not available, because it only requires an HTTP request.
+            _ts = int(time.time())
             thum_url = (
                 "https://image.thum.io/get/noanimate/nocache/"
-                "https://www.gamenerdz.com/deal-of-the-day"
+                f"https://www.gamenerdz.com/deal-of-the-day?_t={_ts}"
             )
             print("  Sending GameNerdz DotD page screenshot via WhatsApp (thum.io)...")
             whatsapp_notifier.send_image_whatsapp(
