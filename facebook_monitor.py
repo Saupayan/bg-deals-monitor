@@ -476,10 +476,108 @@ def _scrape_group_requests(session, group_url: str, max_posts: int) -> List[Dict
     return posts
 
 
+def _scrape_all_groups_playwright(cookies_json: str, max_posts: int) -> List[Dict]:
+    """
+    Use Playwright (real Chrome) with pre-loaded cookies to scrape FB groups.
+    This is the primary approach — it bypasses UA issues and skips the login form
+    entirely by injecting the user's real session cookies directly.
+    """
+    from playwright.sync_api import sync_playwright
+
+    raw_cookies = json.loads(cookies_json)
+    pw_cookies = []
+    for c in raw_cookies:
+        name = c.get('name') or c.get('Name')
+        value = c.get('value') or c.get('Value', '')
+        if name and value:
+            pw_cookies.append({
+                'name': name,
+                'value': value,
+                'domain': '.facebook.com',
+                'path': '/',
+            })
+    print(f"  FB[PW]: Launching Playwright with {len(pw_cookies)} cookies ...")
+
+    all_posts: List[Dict] = []
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(
+                headless=True,
+                args=['--no-sandbox', '--disable-dev-shm-usage',
+                      '--disable-blink-features=AutomationControlled'],
+            )
+            context = browser.new_context(
+                # Mobile Chrome UA — mbasic serves plain HTML to this
+                user_agent=(
+                    'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 '
+                    '(KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36'
+                ),
+                viewport={'width': 412, 'height': 915},
+            )
+            context.add_cookies(pw_cookies)
+
+            for group_url in FB_GROUPS:
+                mbasic_url = group_url.replace('www.facebook.com', 'mbasic.facebook.com')
+                print(f"  FB[PW]: Navigating to {mbasic_url} ...")
+                try:
+                    page = context.new_page()
+                    page.goto(mbasic_url, wait_until='domcontentloaded', timeout=30000)
+                    final_url = page.url
+                    print(f"  FB[PW]: Final URL: {final_url}")
+
+                    if 'login' in final_url or 'checkpoint' in final_url:
+                        print("  FB[PW]: Redirected to login — cookies may be expired.")
+                        page.close()
+                        break
+
+                    content = page.content()
+                    page.close()
+
+                    from bs4 import BeautifulSoup as _BS
+                    soup = _BS(content, 'html.parser')
+                    page_text = soup.get_text()
+                    print(f"  FB[PW]: Page snippet: {page_text[:600]!r}")
+
+                    story_divs = []
+                    for a in soup.find_all('a', href=re.compile(r'story_fbid')):
+                        parent = a.find_parent('div')
+                        if parent and parent not in story_divs:
+                            story_divs.append(parent)
+                    if not story_divs:
+                        story_divs = soup.find_all('div', attrs={'data-ft': True})
+                    print(f"  FB[PW]: Found {len(story_divs)} story divs.")
+
+                    for div in story_divs[:max_posts]:
+                        text = div.get_text(separator='\n').strip()
+                        if not text or len(text) < 30:
+                            continue
+                        post_id = 'h_' + hashlib.md5(text[:300].encode()).hexdigest()[:10]
+                        all_posts.append({
+                            'id': post_id,
+                            'text': text,
+                            'url': group_url,
+                            'group_url': group_url,
+                        })
+
+                except Exception as e:
+                    print(f"  FB[PW]: Error on {group_url}: {e}")
+                    traceback.print_exc()
+
+            browser.close()
+
+    except Exception as e:
+        print(f"  FB[PW]: Playwright launch failed: {e}")
+        traceback.print_exc()
+
+    print(f"  FB[PW]: Total posts collected: {len(all_posts)}")
+    return all_posts
+
+
 def _scrape_all_groups(max_posts: int) -> List[Dict]:
     """
-    Login to Facebook via mbasic (plain HTTP) and scrape all groups in FB_GROUPS.
-    Uses requests + BeautifulSoup — no browser, no bot detection.
+    Scrape all FB groups for selling posts.
+    Primary path: Playwright + pre-loaded cookies (real browser, no login form).
+    Fallback: requests + BeautifulSoup via mbasic (when Playwright unavailable).
     Returns a flat list of post dicts.
     """
     email = os.getenv('FB_EMAIL', '')
@@ -488,6 +586,21 @@ def _scrape_all_groups(max_posts: int) -> List[Dict]:
         print("  FB: FB_EMAIL / FB_PASSWORD not set — skipping Facebook monitoring.")
         return []
 
+    cookies_json = os.getenv('FB_COOKIES', '')
+
+    # ── Primary: Playwright with pre-loaded cookies ──────────────────────────
+    if cookies_json:
+        try:
+            posts = _scrape_all_groups_playwright(cookies_json, max_posts)
+            if posts is not None:  # even empty list means it ran OK
+                return posts
+        except ImportError:
+            print("  FB: Playwright not available — falling back to requests.")
+        except Exception as e:
+            print(f"  FB: Playwright approach error: {e} — falling back to requests.")
+
+    # ── Fallback: requests + BeautifulSoup ──────────────────────────────────
+    print("  FB: Using requests fallback ...")
     session = _make_session()
 
     if not _fb_login_requests(session, email, password):

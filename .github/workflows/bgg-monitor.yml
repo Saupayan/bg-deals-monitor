@@ -56,10 +56,20 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             echo "Manual WhatsApp trigger — sending all current deals (--force)"
-            python monitor.py --force
+            python monitor.py --force 2>&1 | tee /tmp/monitor_output.log
           else
-            python monitor.py --once
+            python monitor.py --once 2>&1 | tee /tmp/monitor_output.log
           fi
+
+      # Output Facebook debug lines as a step summary so they're easy to find
+      - name: FB Debug Summary
+        if: always()
+        run: |
+          echo "## Facebook Scraper Debug" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "FB\[PW\]:|FB:" /tmp/monitor_output.log 2>/dev/null | head -80 || echo "(no FB output found)"
+          grep -E "FB\[PW\]:|FB:" /tmp/monitor_output.log 2>/dev/null | head -80 >> $GITHUB_STEP_SUMMARY || echo "(no FB output found)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       # Save state so next run knows what was already processed / sent
       - name: Save monitor state cache
