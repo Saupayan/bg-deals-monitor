@@ -32,6 +32,7 @@ Usage:
 """
 
 import json
+import re
 import sys
 import time
 import traceback
@@ -49,7 +50,7 @@ import price_checker
 import emailer
 import whatsapp_notifier
 import gamenerdz_dotd
-from game_parser import extract_game_name, is_active_deal
+from game_parser import extract_game_name, is_active_deal, extract_deal_price
 
 
 # Pinned/sticky posts that are NOT real deals â always skip these
@@ -278,86 +279,248 @@ def _process_and_send_bgg(threads_to_process: list, seen: Set[str]) -> None:
 # FORCE MODE  (--force)  — WhatsApp manual trigger
 # -----------------------------------------------------------------------------
 
+# ─────────────────────────────────────────────────────────────────────────────
+# HELPERS FOR PRICE ANALYSIS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_price_float(price_str: str) -> Optional[float]:
+    """Parse a price string like '$18.00' or '18.0' into a float."""
+    if not price_str:
+        return None
+    m = re.search(r'[\d,]+\.?\d*', price_str.replace(',', ''))
+    if m:
+        try:
+            return float(m.group())
+        except ValueError:
+            pass
+    return None
+
+
+def _deal_verdict(deal_price: Optional[float],
+                  retail_prices: list,
+                  sold_listings: list) -> str:
+    """
+    Return a short verdict emoji + label comparing the deal price to retail
+    and recent BGG sold prices.
+
+    Tiers (all comparisons vs cheapest in-stock retail):
+      🔥 Steal    — deal is ≥30% below cheapest retail
+      ✅ Good     — deal is ≥15% below cheapest retail
+      😐 Fair     — deal is within 15% of cheapest retail (either way)
+      🤔 Pricey   — deal is ≥15% above cheapest retail (cheaper online)
+      ❓ No data  — not enough price info to call it
+    """
+    if deal_price is None:
+        return "❓ No price in post"
+
+    # Find cheapest in-stock retail price
+    in_stock = [p for p in retail_prices if p.get('in_stock')]
+    if not in_stock:
+        in_stock = retail_prices  # fall back to any price if nothing in stock
+
+    if not in_stock:
+        # No retail data — try to use sold prices as baseline
+        sold_floats = [_parse_price_float(s['price']) for s in sold_listings]
+        sold_floats = [p for p in sold_floats if p]
+        if not sold_floats:
+            return "❓ No price data to compare"
+        avg_sold = sum(sold_floats) / len(sold_floats)
+        ratio = deal_price / avg_sold
+        if ratio <= 0.70:
+            return f"🔥 Steal — {int((1 - ratio)*100)}% below avg BGG sold price"
+        if ratio <= 0.85:
+            return f"✅ Good — {int((1 - ratio)*100)}% below avg BGG sold price"
+        if ratio <= 1.15:
+            return f"😐 Fair — near avg BGG sold price"
+        return f"🤔 Pricey — above avg BGG sold price (${avg_sold:.2f})"
+
+    cheapest_retail = in_stock[0]['price_usd']
+    ratio = deal_price / cheapest_retail
+
+    if ratio <= 0.70:
+        return f"🔥 Steal — {int((1 - ratio)*100)}% below cheapest retail"
+    if ratio <= 0.85:
+        return f"✅ Good — {int((1 - ratio)*100)}% below cheapest retail"
+    if ratio <= 1.15:
+        return f"😐 Fair — near retail price"
+    return f"🤔 Pricey — cheapest online is ${cheapest_retail:.2f}"
+
+
+def _format_deal_card(thread: dict, game_name: str,
+                       retail_prices: list, sold_listings: list) -> list:
+    """
+    Build the lines for one deal's WhatsApp card.
+    Returns a list of strings (one per line).
+    """
+    active = is_active_deal(thread['subject'])
+    status = "🟢" if active else "🔴"
+
+    try:
+        age_h = int((datetime.now(timezone.utc) - _parse_thread_date(thread['post_date']))
+                    .total_seconds() / 3600)
+        age_str = f"{age_h}h ago" if age_h < 48 else f"{age_h // 24}d ago"
+    except Exception:
+        age_str = ""
+
+    thread_url = (f"https://boardgamegeek.com/thread/{thread['id']}"
+                  if thread.get('id') else '')
+
+    # Dead deals get a compact single-line entry — no price research
+    if not active:
+        lines = [f"{status} *{game_name}* ({age_str}) — expired"]
+        if thread_url:
+            lines.append(f"  {thread_url}")
+        return lines
+
+    # Live deal — build full card
+    deal_price = extract_deal_price(thread['subject'])
+    lines = [f"{status} *{game_name}* ({age_str})"]
+
+    if deal_price is not None:
+        lines.append(f"  💰 Deal price: ${deal_price:.2f}")
+
+    # Retail prices (in-stock, cheapest first)
+    in_stock = [p for p in retail_prices if p.get('in_stock')]
+    if in_stock:
+        lo, hi = in_stock[0]['price_usd'], in_stock[-1]['price_usd']
+        cheapest_store = in_stock[0]['store']
+        if lo == hi:
+            lines.append(f"  🏪 Retail: ${lo:.2f} ({cheapest_store})")
+        else:
+            lines.append(f"  🏪 Retail: ${lo:.2f}–${hi:.2f} (cheapest: {cheapest_store})")
+    elif retail_prices:
+        lines.append(f"  🏪 Retail: (out of stock everywhere)")
+    else:
+        lines.append(f"  🏪 Retail: no data")
+
+    # BGG Marketplace sold listings
+    sold_floats = [_parse_price_float(s['price']) for s in sold_listings]
+    sold_floats = [p for p in sold_floats if p]
+    if sold_floats:
+        lo_s, hi_s = min(sold_floats), max(sold_floats)
+        n = len(sold_floats)
+        if lo_s == hi_s:
+            lines.append(f"  📦 BGG sold: ${lo_s:.2f} ({n} sale{'s' if n != 1 else ''})")
+        else:
+            lines.append(f"  📦 BGG sold: ${lo_s:.2f}–${hi_s:.2f} ({n} sale{'s' if n != 1 else ''})")
+    else:
+        lines.append(f"  📦 BGG sold: no recent data")
+
+    # Verdict
+    verdict = _deal_verdict(deal_price, retail_prices, sold_listings)
+    lines.append(f"  {verdict}")
+
+    if thread_url:
+        lines.append(f"  🔗 {thread_url}")
+
+    return lines
+
+
+# -----------------------------------------------------------------------------
+# FORCE MODE  (--force)  — WhatsApp manual trigger
+# -----------------------------------------------------------------------------
+
 def run_force_mode() -> None:
     """
     Triggered when the user sends the WhatsApp trigger word.
-    Sends a compact WhatsApp list of every LIVE deal posted in the last 7 days.
 
-    - Fetches up to 3 pages from BGG Hot Deals (stops early once all threads are > 7 days old)
-    - Filters: within last 7 days AND still active (not DEAD / Sold Out / Expired)
-    - Sends ONE compact WhatsApp message — no email, no full research pipeline
+    - Fetches up to 3 pages of BGG Hot Deals (stops when all threads > 7 days old)
+    - Shows ALL deals from the last 7 days (live and expired)
+    - For LIVE deals: runs retail price lookup + BGG marketplace sold listings,
+      then gives a deal verdict (🔥 Steal / ✅ Good / 😐 Fair / 🤔 Pricey / ❓)
+    - For EXPIRED/DEAD deals: compact single-line entry (no research)
     - Does NOT update seen_threads.json — scheduled runs continue unaffected
     """
     now_str = datetime.now().strftime('%H:%M')
-    print(f"\n=== FORCE / MANUAL TRIGGER @ {now_str} — live deals from the last 7 days ===\n")
+    print(f"\n=== FORCE / MANUAL TRIGGER @ {now_str} — deals from the last 7 days ===\n")
 
+    # ── 1. Fetch up to 3 pages ────────────────────────────────────────────────
     all_threads: List[Dict] = []
-    for page in range(1, 4):  # pages 1–3 — enough to cover a full week
+    for page in range(1, 4):
         print(f"  Fetching BGG Hot Deals page {page}...")
         page_threads = bgg_api.get_forum_threads(forum_id=config.BGG_FORUM_ID, page=page)
         if not page_threads:
             print(f"  Page {page} returned nothing — stopping.")
             break
-
-        # Stop fetching more pages once every thread on the page is older than 7 days
         page_has_recent = any(_is_within_hours(t['post_date'], hours=7 * 24)
                                for t in page_threads)
         all_threads.extend(page_threads)
-
         if not page_has_recent:
-            print(f"  Page {page}: all threads older than 7 days — no need for more pages.")
+            print(f"  Page {page}: all threads older than 7 days — done fetching.")
             break
-        time.sleep(1)  # be polite to BGG between page requests
+        time.sleep(1)
 
-    # Filter: within 7 days, not a pinned post — include both live AND dead deals
+    # ── 2. Filter to 7 days, sort newest first ────────────────────────────────
     week_deals = [
         t for t in all_threads
         if t['subject'].lower().strip() not in SKIP_SUBJECTS
         and _is_within_hours(t['post_date'], hours=7 * 24)
     ]
-
-    # Sort newest → oldest
     week_deals.sort(key=lambda t: _parse_thread_date(t['post_date']), reverse=True)
 
-    live_count = sum(1 for t in week_deals if is_active_deal(t['subject']))
-    dead_count = len(week_deals) - live_count
-    print(f"\n  Found {len(week_deals)} deal(s) from the last 7 days "
-          f"({live_count} live, {dead_count} expired/dead).")
+    live_deals  = [t for t in week_deals if is_active_deal(t['subject'])]
+    dead_deals  = [t for t in week_deals if not is_active_deal(t['subject'])]
+    print(f"  {len(week_deals)} total: {len(live_deals)} live, {len(dead_deals)} expired\n")
 
-    # Build compact WhatsApp message
     if not week_deals:
-        msg = (
+        whatsapp_notifier.send_whatsapp(
             f"🎲 *BGG Hot Deals — last 7 days*\n\n"
-            f"No deals found in the last 7 days.\n\n"
-            f"_Checked at {now_str}_"
+            f"No deals found.\n\n_Checked at {now_str}_"
         )
-    else:
-        lines = [
-            f"🎲 *BGG Hot Deals — last 7 days*",
-            f"_{live_count} live · {dead_count} expired_",
-            "",
-        ]
-        for t in week_deals:
-            game_name = extract_game_name(t['subject']) or t['subject']
-            thread_url = (f"https://boardgamegeek.com/thread/{t['id']}"
-                          if t.get('id') else '')
-            try:
-                age_h = int((datetime.now(timezone.utc) - _parse_thread_date(t['post_date']))
-                            .total_seconds() / 3600)
-                age_str = f"{age_h}h ago" if age_h < 48 else f"{age_h // 24}d ago"
-            except Exception:
-                age_str = ""
-            status = "🟢" if is_active_deal(t['subject']) else "🔴"
-            lines.append(f"{status} *{game_name}* ({age_str})")
-            if thread_url:
-                lines.append(f"  {thread_url}")
-        lines.append("")
-        lines.append(f"_Checked at {now_str}_")
-        msg = "\n".join(lines)
+        return
 
+    # ── 3. Research each LIVE deal ────────────────────────────────────────────
+    deal_cards: Dict[str, list] = {}   # thread_id → lines
+
+    for thread in week_deals:
+        game_name = extract_game_name(thread['subject']) or thread['subject']
+
+        if not is_active_deal(thread['subject']):
+            # Dead: no research needed
+            deal_cards[thread['id']] = _format_deal_card(thread, game_name, [], [])
+            continue
+
+        print(f"  Researching: '{game_name}'")
+        retail_prices = []
+        sold_listings = []
+
+        # Retail prices via Board Game Oracle (game name search, no BGG ID needed)
+        try:
+            retail_prices = price_checker.get_all_prices(game_name, '')
+        except Exception as e:
+            print(f"    Price check error: {e}")
+
+        # BGG Marketplace sold listings (needs BGG ID)
+        try:
+            bgg_id = bgg_api.search_game(game_name)
+            if bgg_id:
+                time.sleep(0.5)
+                sold_listings = marketplace.get_sold_listings(bgg_id, num_listings=5)
+        except Exception as e:
+            print(f"    Marketplace error: {e}")
+
+        deal_cards[thread['id']] = _format_deal_card(
+            thread, game_name, retail_prices, sold_listings
+        )
+        time.sleep(1)  # be polite between deals
+
+    # ── 4. Assemble and send WhatsApp message ─────────────────────────────────
+    lines = [
+        f"🎲 *BGG Hot Deals — last 7 days*",
+        f"_{len(live_deals)} live · {len(dead_deals)} expired_",
+        "",
+    ]
+
+    for thread in week_deals:
+        lines.extend(deal_cards.get(thread['id'], []))
+        lines.append("")   # blank line between deals
+
+    lines.append(f"_Checked at {now_str}_")
+    msg = "\n".join(lines)
+
+    print(f"\n  Sending WhatsApp ({len(msg)} chars)...")
     print(msg)
     whatsapp_notifier.send_whatsapp(msg)
-
 
 # -----------------------------------------------------------------------------
 # TEST MODE  (--test)  — local development / full research

@@ -119,6 +119,28 @@ def is_active_deal(thread_title: str) -> bool:
     return not any(m in lower for m in markers)
 
 
+
+def extract_deal_price(thread_title: str) -> 'Optional[float]':
+    """
+    Extract the deal price (in USD) from a BGG Hot Deals thread title.
+    Returns the price as a float, or None if no price is found.
+
+    Handles formats like:
+      "[Amazon] Wingspan $40.99"          → 40.99
+      "Nova Era on Amazon for $17.09"     → 17.09
+      "Beyond the Sun $41.99 (51% off)"   → 41.99
+      "Gloomhaven $120"                   → 120.0
+    """
+    if not thread_title:
+        return None
+    match = re.search(r'\$([\d,]+\.?\d*)', thread_title)
+    if match:
+        try:
+            return float(match.group(1).replace(',', ''))
+        except ValueError:
+            pass
+    return None
+
 # ── Quick self-test ───────────────────────────────────────────────────────────
 if __name__ == '__main__':
     test_titles = [
