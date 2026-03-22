@@ -50,6 +50,7 @@ import price_checker
 import emailer
 import whatsapp_notifier
 import gamenerdz_dotd
+import facebook_monitor
 from game_parser import extract_game_name, is_active_deal, extract_deal_price, extract_multi_game_deals
 
 
@@ -596,6 +597,14 @@ def run_force_mode() -> None:
         print(f"  GameNerdz DotD error: {e}")
         traceback.print_exc()
 
+    # Also check Facebook groups for qualifying deals
+    print("\n  Checking Facebook groups for deals...")
+    try:
+        facebook_monitor.run_fb_force_mode()
+    except Exception as e:
+        print(f"  Facebook force mode error: {e}")
+        traceback.print_exc()
+
 # -----------------------------------------------------------------------------
 # TEST MODE  (--test)  — local development / full research
 # -----------------------------------------------------------------------------
@@ -757,6 +766,12 @@ if __name__ == '__main__':
     if '--test' in sys.argv:
         # Local dev: full research pipeline on the last 24h of deals.
         run_test_mode()
+        sys.exit(0)
+
+    # --fb-once: periodic Facebook group monitoring (used by facebook-monitor.yml).
+    # Scrapes configured FB groups, alerts on new posts with qualifying games.
+    if '--fb-once' in sys.argv:
+        facebook_monitor.run_fb_monitor_once()
         sys.exit(0)
 
     # --once: single check and exit (for GitHub Actions / cron jobs)
