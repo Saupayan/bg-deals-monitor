@@ -141,6 +141,60 @@ def extract_deal_price(thread_title: str) -> 'Optional[float]':
             pass
     return None
 
+
+def extract_multi_game_deals(title: str):
+    """
+    Detect and parse a BGG Hot Deals thread that lists multiple games in the title.
+
+    Returns a list of (name, price_or_None) tuples when 2+ price patterns are found
+    (e.g. "Fate of the Fellowship ($56), Hot Streak ($35), Emerald Echoes ($52.50)").
+    Returns None if this looks like a single-game thread.
+
+    Handles both "$56" and "21$" price formats.
+    Game names containing commas (e.g. "Istanbul, the Dice Game") are handled
+    correctly because we split on "), " not on "," alone.
+    """
+    from typing import List, Tuple, Optional as Opt
+    if not title:
+        return None
+
+    # Count price-like patterns — fewer than 2 means single deal
+    price_hits = re.findall(r'\$[\d,]+\.?\d*|[\d,]+\.?\d*\$', title)
+    if len(price_hits) < 2:
+        return None
+
+    # Split on "), " — each chunk is "Game Name ($price" or "Game Name (price$"
+    # The very last chunk may still have its closing ) — handled in the regex below
+    parts = re.split(r'\)\s*,\s*', title)
+    results: List[Tuple[str, Opt[float]]] = []
+
+    for part in parts:
+        part = part.strip()
+        if not part:
+            continue
+
+        # Extract price from the opening-paren block at the end:  ($56  or  (21$
+        # Allow optional trailing ) for the last item
+        price_m = (re.search(r'\(\s*\$([\d,]+\.?\d*)\s*\)?\s*$', part) or
+                   re.search(r'\(\s*([\d,]+\.?\d*)\$\s*\)?\s*$', part))
+        price = None
+        if price_m:
+            try:
+                price = float(price_m.group(1).replace(',', ''))
+            except ValueError:
+                pass
+
+        # Game name: everything before the opening paren (or the whole string
+        # when there is no paren — e.g. the last item with no price)
+        name_m = re.match(r'^(.+?)\s*\(', part)
+        name = name_m.group(1).strip() if name_m else part.strip()
+        name = name.strip(' -\u2013\u2014,.:')
+
+        if name and len(name) > 1:
+            results.append((name, price))
+
+    return results if len(results) >= 2 else None
+
 # ── Quick self-test ───────────────────────────────────────────────────────────
 if __name__ == '__main__':
     test_titles = [

@@ -50,7 +50,7 @@ import price_checker
 import emailer
 import whatsapp_notifier
 import gamenerdz_dotd
-from game_parser import extract_game_name, is_active_deal, extract_deal_price
+from game_parser import extract_game_name, is_active_deal, extract_deal_price, extract_multi_game_deals
 
 
 # Pinned/sticky posts that are NOT real deals â always skip these
@@ -350,6 +350,13 @@ def _format_deal_card(thread: dict, game_name: str,
                        retail_prices: list, sold_listings: list) -> list:
     """
     Build the lines for one deal's WhatsApp card.
+
+    If the thread title contains multiple games (e.g. bundle posts like
+    "Game A ($30), Game B ($25), Game C ($40)"), a compact multi-game card
+    is returned listing each name and price — no per-game research is done
+    because running the full pipeline on 5–6 games per thread would be too slow.
+
+    For single-game threads, a full card with retail/sold/verdict is built.
     Returns a list of strings (one per line).
     """
     active = is_active_deal(thread['subject'])
@@ -365,14 +372,25 @@ def _format_deal_card(thread: dict, game_name: str,
     thread_url = (f"https://boardgamegeek.com/thread/{thread['id']}"
                   if thread.get('id') else '')
 
-    # Dead deals get a compact single-line entry — no price research
+    # ── Dead deal: compact one-liner ─────────────────────────────────────────
     if not active:
         lines = [f"{status} *{game_name}* ({age_str}) — expired"]
         if thread_url:
             lines.append(f"  {thread_url}")
         return lines
 
-    # Live deal — build full card
+    # ── Multi-game thread detection ───────────────────────────────────────────
+    multi = extract_multi_game_deals(thread['subject'])
+    if multi:
+        lines = [f"{status} *[{len(multi)} games in this post]* ({age_str})"]
+        for name, price in multi:
+            price_str = f"${price:.2f}" if price is not None else "price?"
+            lines.append(f"  • {name} — {price_str}")
+        if thread_url:
+            lines.append(f"  🔗 {thread_url}")
+        return lines
+
+    # ── Single live deal: full card ───────────────────────────────────────────
     deal_price = extract_deal_price(thread['subject'])
     lines = [f"{status} *{game_name}* ({age_str})"]
 
@@ -414,7 +432,6 @@ def _format_deal_card(thread: dict, game_name: str,
         lines.append(f"  🔗 {thread_url}")
 
     return lines
-
 
 # -----------------------------------------------------------------------------
 # FORCE MODE  (--force)  — WhatsApp manual trigger
@@ -480,6 +497,12 @@ def run_force_mode() -> None:
             deal_cards[thread['id']] = _format_deal_card(thread, game_name, [], [])
             continue
 
+        # Multi-game threads: skip API research — the card lists all games & prices
+        if extract_multi_game_deals(thread['subject']):
+            print(f"  Multi-game thread — listing items, skipping research")
+            deal_cards[thread['id']] = _format_deal_card(thread, game_name, [], [])
+            continue
+
         print(f"  Researching: '{game_name}'")
         retail_prices = []
         sold_listings = []
@@ -518,9 +541,18 @@ def run_force_mode() -> None:
     lines.append(f"_Checked at {now_str}_")
     msg = "\n".join(lines)
 
-    print(f"\n  Sending WhatsApp ({len(msg)} chars)...")
+    print(f"\n  Sending BGG deals WhatsApp ({len(msg)} chars)...")
     print(msg)
     whatsapp_notifier.send_whatsapp(msg)
+
+    # Also check GameNerdz DotD — force=True bypasses the once-per-day guard
+    # so you always get the current DotD when you manually trigger
+    print("\n  Checking GameNerdz Deal of the Day...")
+    try:
+        gamenerdz_dotd.check_gamenerdz_dotd(force=True, use_playwright=False)
+    except Exception as e:
+        print(f"  GameNerdz DotD error: {e}")
+        traceback.print_exc()
 
 # -----------------------------------------------------------------------------
 # TEST MODE  (--test)  — local development / full research
