@@ -246,182 +246,186 @@ def _format_game_card(game_name: str, rating: float, deal_price: Optional[float]
 
 # ─── Facebook scraping via Playwright ────────────────────────────────────────
 
-def _fb_login(page, email: str, password: str) -> bool:
+def _make_session() -> "requests.Session":
+    """Create a requests Session with a realistic browser User-Agent."""
+    import requests as _req
+    s = _req.Session()
+    s.headers.update({
+        'User-Agent': (
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+            'AppleWebKit/537.36 (KHTML, like Gecko) '
+            'Chrome/124.0.0.0 Safari/537.36'
+        ),
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    })
+    return s
+
+
+def _fb_login_requests(session, email: str, password: str) -> bool:
     """
-    Log in via mbasic.facebook.com — the true bare-bones HTML Facebook
-    (no JavaScript, no React).  Most scraping-friendly, least bot-detection.
+    Log in to mbasic.facebook.com using plain HTTP requests + BeautifulSoup.
+    mbasic is Facebook's zero-JS HTML site — designed for basic HTTP clients,
+    so no browser / bot-detection applies here.
     Returns True on success.
     """
+    from bs4 import BeautifulSoup
+
     try:
-        print("  FB: Navigating to mbasic.facebook.com ...")
-        page.goto("https://mbasic.facebook.com", wait_until="domcontentloaded", timeout=45_000)
-        time.sleep(2)
-        print(f"  FB: Page URL after load: {page.url}")
+        print("  FB: Fetching mbasic.facebook.com login page ...")
+        r = session.get('https://mbasic.facebook.com', timeout=30)
+        r.raise_for_status()
+        print(f"  FB: Login page status {r.status_code}, URL: {r.url}")
 
-        # mbasic login form — always present on the homepage if not logged in
-        email_sel = 'input[name="email"]'
-        pass_sel  = 'input[name="pass"]'
+        soup = BeautifulSoup(r.text, 'html.parser')
+        form = soup.find('form', id='login_form') or soup.find('form')
+        if not form:
+            print("  FB: No login form found on mbasic homepage.")
+            print(f"  FB: Page snippet: {soup.get_text()[:300]!r}")
+            return False
 
-        try:
-            page.wait_for_selector(email_sel, timeout=10_000, state="visible")
-        except Exception:
-            print(f"  FB: No email field at mbasic homepage. URL={page.url} title='{page.title()}'")
-            # Try navigating directly to login page
-            page.goto("https://mbasic.facebook.com/login/", wait_until="domcontentloaded", timeout=30_000)
-            time.sleep(2)
-            page.wait_for_selector(email_sel, timeout=10_000, state="visible")
+        action = form.get('action', '/login/device-based/regular/login/')
+        if action.startswith('/'):
+            action = 'https://mbasic.facebook.com' + action
 
-        print("  FB: Found email field.")
-        page.click(email_sel)
-        time.sleep(0.2)
-        page.keyboard.type(email, delay=50)
-        print("  FB: Email typed.")
+        # Collect all hidden form fields
+        data: Dict[str, str] = {}
+        for inp in form.find_all('input'):
+            name = inp.get('name')
+            if name:
+                data[name] = inp.get('value', '')
 
-        page.wait_for_selector(pass_sel, timeout=5_000, state="visible")
-        page.click(pass_sel)
-        time.sleep(0.2)
-        page.keyboard.type(password, delay=50)
-        print("  FB: Password typed.")
+        data['email'] = email
+        data['pass']  = password
+        print(f"  FB: Submitting login to {action} ...")
 
-        # mbasic login button is always input[name="login"]
-        page.click('input[name="login"]', timeout=5_000)
-        print("  FB: Login button clicked.")
+        r2 = session.post(action, data=data, timeout=30)
+        print(f"  FB: Post-login status {r2.status_code}, URL: {r2.url}")
 
-        # Wait for redirect away from any login/checkpoint page
-        page.wait_for_function(
-            "() => !window.location.href.includes('login') && !window.location.href.includes('checkpoint')",
-            timeout=35_000,
-        )
-        time.sleep(2)
-        print(f"  FB: Post-login URL: {page.url}")
+        # Success: redirected away from login/
+        if 'login' in r2.url or 'checkpoint' in r2.url:
+            soup2 = BeautifulSoup(r2.text, 'html.parser')
+            print(f"  FB: Still on login/checkpoint. Page snippet: {soup2.get_text()[:200]!r}")
+            return False
+
         print("  FB: Login successful.")
         return True
 
     except Exception as e:
-        print(f"  FB: Login failed — {e}")
-        try:
-            print(f"  FB: URL at failure: {page.url}")
-        except Exception:
-            pass
+        print(f"  FB: Login error — {e}")
+        traceback.print_exc()
         return False
 
 
-def _scrape_group_posts(page, group_url: str, max_posts: int) -> List[Dict]:
+def _scrape_group_requests(session, group_url: str, max_posts: int) -> List[Dict]:
     """
-    Navigate to a Facebook group and extract text + ID from recent posts.
+    Scrape a Facebook group's posts using the mbasic site via HTTP requests.
     Returns list of {id, text, url, group_url}.
     """
-    posts = []
+    from bs4 import BeautifulSoup
+
+    posts: List[Dict] = []
+    mbasic_url = group_url.replace('www.facebook.com', 'mbasic.facebook.com')
+
     try:
-        # Use mbasic — pure HTML, no JS, most scraping-friendly
-        mbasic_url = group_url.replace('www.facebook.com', 'mbasic.facebook.com')
-        print(f"  FB: Loading {mbasic_url} ...")
-        page.goto(mbasic_url, wait_until="domcontentloaded", timeout=45_000)
-        time.sleep(3)
-
-        print(f"  FB: Group page URL: {page.url}")
-
-        # Check if redirected to login/checkpoint
-        if 'login' in page.url or 'checkpoint' in page.url:
-            print("  FB: Redirected to login — session not authenticated.")
-            return posts
-
-        # mbasic doesn't need scrolling — load more pages via "See More" links
-        # Collect posts from current page, then follow "See More Posts" links
-        all_articles = []
         pages_fetched = 0
-        max_pages = 3  # fetch at most 3 pages of posts
+        next_url: Optional[str] = mbasic_url
 
-        while pages_fetched < max_pages and len(all_articles) < max_posts:
-            # On mbasic, each post story is a <div> inside the feed section.
-            # Posts have links containing "permalink" or "story_fbid".
-            # The most reliable selector is divs that contain a story permalink link.
-            current_articles = page.query_selector_all('div[data-ft]')
-            if not current_articles:
-                # Fallback: any div that contains a story link
-                current_articles = page.query_selector_all('div:has(a[href*="story_fbid"]), div:has(a[href*="permalink"])')
-            print(f"  FB: Page {pages_fetched+1}: found {len(current_articles)} post divs.")
+        while next_url and pages_fetched < 3 and len(posts) < max_posts:
+            print(f"  FB: Fetching {next_url[:80]} ...")
+            r = session.get(next_url, timeout=30)
+            r.raise_for_status()
+            print(f"  FB: Status {r.status_code}, final URL: {r.url}")
 
-            if not current_articles and pages_fetched == 0:
-                # Nothing found at all — dump page snippet for debugging
-                body = page.inner_text('body')
-                print(f"  FB: Page snippet: {body[:400]!r}")
+            if 'login' in r.url or 'checkpoint' in r.url:
+                print("  FB: Redirected to login/checkpoint — session expired.")
                 break
 
-            all_articles.extend(current_articles)
-            pages_fetched += 1
+            soup = BeautifulSoup(r.text, 'html.parser')
 
-            if len(all_articles) >= max_posts:
+            # Each post on mbasic groups is a <div> that contains a story link.
+            # story_fbid appears in links like /?story_fbid=...&id=...
+            # We collect the outermost divs that wrap each story.
+            story_divs = []
+
+            # Primary: divs containing story_fbid links (each is one post)
+            for a in soup.find_all('a', href=re.compile(r'story_fbid')):
+                parent = a.find_parent('div')
+                if parent and parent not in story_divs:
+                    story_divs.append(parent)
+
+            # Fallback: divs with data-ft attribute
+            if not story_divs:
+                story_divs = soup.find_all('div', attrs={'data-ft': True})
+
+            print(f"  FB: Page {pages_fetched+1}: found {len(story_divs)} story divs.")
+
+            if not story_divs and pages_fetched == 0:
+                text_sample = soup.get_text()[:400]
+                print(f"  FB: Page text snippet: {text_sample!r}")
                 break
 
-            # Follow "See More Posts" / pagination link if available
-            next_link = None
-            for link_text in ['See More Posts', 'More Posts', 'Next']:
+            for div in story_divs:
+                if len(posts) >= max_posts:
+                    break
                 try:
-                    next_link = page.query_selector(f'a:has-text("{link_text}")')
-                    if next_link:
-                        break
-                except Exception:
-                    pass
+                    text = div.get_text(separator='\n').strip()
+                    if not text or len(text) < 30:
+                        continue
 
-            if not next_link:
-                break
+                    # Extract post ID from story_fbid link
+                    post_id = None
+                    for a in div.find_all('a', href=True):
+                        href = a['href']
+                        m = re.search(r'story_fbid[=%]3D?(\d+)', href)
+                        if not m:
+                            m = re.search(r'/posts/(\d+)', href)
+                        if m:
+                            post_id = m.group(1)
+                            break
 
-            next_href = next_link.get_attribute('href')
-            if next_href:
-                next_url = f"https://mbasic.facebook.com{next_href}" if next_href.startswith('/') else next_href
-                print(f"  FB: Following pagination: {next_url[:80]}...")
-                page.goto(next_url, wait_until="domcontentloaded", timeout=30_000)
-                time.sleep(2)
-            else:
-                break
+                    if not post_id:
+                        post_id = 'h_' + hashlib.md5(text[:300].encode()).hexdigest()[:10]
 
-        articles = all_articles[:max_posts]
-        print(f"  FB: Total {len(articles)} post divs to process.")
+                    post_url = (f"{group_url.rstrip('/')}/posts/{post_id}"
+                                if not post_id.startswith('h_') else group_url)
 
-        for article in articles[:max_posts]:
-            try:
-                text = article.inner_text()
-                if not text or len(text) < 30:
+                    posts.append({
+                        'id': post_id,
+                        'text': text,
+                        'url': post_url,
+                        'group_url': group_url,
+                    })
+                except Exception as e:
+                    print(f"  FB: Error parsing story div: {e}")
                     continue
 
-                # Extract numeric post ID from any /posts/ link
-                post_id = None
-                for link in article.query_selector_all('a[href*="/posts/"]'):
-                    href = link.get_attribute('href') or ''
-                    m = re.search(r'/posts/(\d+)', href)
-                    if m:
-                        post_id = m.group(1)
+            pages_fetched += 1
+
+            # Follow pagination link if we need more posts
+            next_url = None
+            if len(posts) < max_posts:
+                for link_text in ['See More Posts', 'More Posts']:
+                    a = soup.find('a', string=re.compile(link_text, re.I))
+                    if a and a.get('href'):
+                        href = a['href']
+                        next_url = ('https://mbasic.facebook.com' + href
+                                    if href.startswith('/') else href)
+                        print(f"  FB: Following pagination to {next_url[:80]}...")
                         break
-
-                # Fallback: stable hash of post text
-                if not post_id:
-                    post_id = 'h_' + hashlib.md5(text[:300].encode()).hexdigest()[:10]
-
-                post_url = (f"{group_url.rstrip('/')}/posts/{post_id}"
-                            if not post_id.startswith('h_') else group_url)
-
-                posts.append({
-                    'id': post_id,
-                    'text': text,
-                    'url': post_url,
-                    'group_url': group_url,
-                })
-
-            except Exception as e:
-                print(f"  FB: Error reading article: {e}")
-                continue
 
     except Exception as e:
         print(f"  FB: Error scraping group: {e}")
         traceback.print_exc()
 
+    print(f"  FB: Collected {len(posts)} posts from {group_url}.")
     return posts
 
 
 def _scrape_all_groups(max_posts: int) -> List[Dict]:
     """
-    Login to Facebook and scrape all groups in FB_GROUPS.
+    Login to Facebook via mbasic (plain HTTP) and scrape all groups in FB_GROUPS.
+    Uses requests + BeautifulSoup — no browser, no bot detection.
     Returns a flat list of post dicts.
     """
     email = os.getenv('FB_EMAIL', '')
@@ -430,67 +434,17 @@ def _scrape_all_groups(max_posts: int) -> List[Dict]:
         print("  FB: FB_EMAIL / FB_PASSWORD not set — skipping Facebook monitoring.")
         return []
 
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        print("  FB: Playwright not installed — skipping Facebook monitoring.")
+    session = _make_session()
+
+    if not _fb_login_requests(session, email, password):
+        print("  FB: Login failed — aborting Facebook scrape.")
         return []
 
-    # Optional stealth patching — suppresses many headless browser signals
-    try:
-        from playwright_stealth import stealth_sync as _stealth_sync
-        _has_stealth = True
-    except ImportError:
-        _has_stealth = False
-        print("  FB: playwright-stealth not available — running without stealth patches.")
-
-    all_posts = []
-    try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(
-                headless=True,
-                args=[
-                    '--no-sandbox',
-                    '--disable-blink-features=AutomationControlled',
-                    '--disable-infobars',
-                    '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                ],
-            )
-            ctx = browser.new_context(
-                # Standard desktop UA — mbasic.facebook.com works fine with this
-                user_agent=(
-                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                    'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/124.0.0.0 Safari/537.36'
-                ),
-                viewport={'width': 1280, 'height': 900},
-                locale='en-US',
-                timezone_id='America/New_York',
-            )
-            ctx.add_init_script(
-                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
-            )
-            page = ctx.new_page()
-            if _has_stealth:
-                _stealth_sync(page)
-                print("  FB: Stealth patches applied.")
-
-            if not _fb_login(page, email, password):
-                print("  FB: Login failed — aborting Facebook scrape.")
-                browser.close()
-                return []
-
-            for group_url in FB_GROUPS:
-                group_posts = _scrape_group_posts(page, group_url, max_posts=max_posts)
-                all_posts.extend(group_posts)
-                time.sleep(2)
-
-            browser.close()
-
-    except Exception as e:
-        print(f"  FB: Fatal Playwright error: {e}")
-        traceback.print_exc()
+    all_posts: List[Dict] = []
+    for group_url in FB_GROUPS:
+        group_posts = _scrape_group_requests(session, group_url, max_posts=max_posts)
+        all_posts.extend(group_posts)
+        time.sleep(1)
 
     return all_posts
 
