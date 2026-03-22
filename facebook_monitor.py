@@ -249,41 +249,98 @@ def _format_game_card(game_name: str, rating: float, deal_price: Optional[float]
 def _fb_login(page, email: str, password: str) -> bool:
     """Log in to Facebook. Returns True on success."""
     try:
-        print("  FB: Navigating to facebook.com ...")
-        page.goto("https://www.facebook.com", wait_until="domcontentloaded", timeout=30_000)
-        time.sleep(2)
+        print("  FB: Navigating to facebook.com/login ...")
+        page.goto("https://www.facebook.com/login", wait_until="networkidle", timeout=45_000)
+        time.sleep(3)
 
-        # Dismiss cookie/privacy consent banner if shown
+        print(f"  FB: Page URL after load: {page.url}")
+
+        # Dismiss cookie/privacy consent banner if shown (common in some regions)
         for sel in [
             '[data-cookiebanner="accept_button"]',
             'button[title="Allow all cookies"]',
             '[aria-label="Allow all cookies"]',
             'button:has-text("Allow all cookies")',
             'button:has-text("Accept all")',
+            'button:has-text("Allow essential and optional cookies")',
+            '[data-testid="cookie-policy-manage-dialog-accept-button"]',
         ]:
             try:
                 page.click(sel, timeout=2_000)
-                time.sleep(1)
+                print(f"  FB: Dismissed cookie consent ({sel})")
+                time.sleep(2)
                 break
             except Exception:
                 pass
 
-        # Enter credentials
-        page.fill('#email', email, timeout=10_000)
-        page.fill('#pass', password, timeout=5_000)
-        page.click('[name="login"]', timeout=5_000)
+        # Find email field — try multiple selectors in priority order
+        EMAIL_SELECTORS = [
+            'input[name="email"]',
+            '#email',
+            'input[type="email"]',
+            'input[autocomplete="username"]',
+        ]
+        PASS_SELECTORS = [
+            'input[name="pass"]',
+            '#pass',
+            'input[type="password"]',
+        ]
+
+        email_sel = None
+        for sel in EMAIL_SELECTORS:
+            try:
+                page.wait_for_selector(sel, timeout=8_000, state="visible")
+                email_sel = sel
+                print(f"  FB: Found email field via '{sel}'")
+                break
+            except Exception:
+                continue
+
+        if not email_sel:
+            print(f"  FB: Could not find email field. Current URL: {page.url}")
+            print(f"  FB: Page title: {page.title()}")
+            return False
+
+        page.fill(email_sel, email, timeout=5_000)
+
+        pass_sel = None
+        for sel in PASS_SELECTORS:
+            try:
+                page.wait_for_selector(sel, timeout=5_000, state="visible")
+                pass_sel = sel
+                break
+            except Exception:
+                continue
+
+        if not pass_sel:
+            print("  FB: Could not find password field.")
+            return False
+
+        page.fill(pass_sel, password, timeout=5_000)
+
+        # Click the login button
+        for sel in ['[name="login"]', 'button[type="submit"]', 'input[type="submit"]']:
+            try:
+                page.click(sel, timeout=5_000)
+                break
+            except Exception:
+                continue
 
         # Wait until redirected away from login page
         page.wait_for_function(
             "() => !window.location.href.includes('/login')",
-            timeout=25_000,
+            timeout=30_000,
         )
-        time.sleep(2)
+        time.sleep(3)
+
+        print(f"  FB: Post-login URL: {page.url}")
 
         # Dismiss "Save login info?" / "Not Now" prompt if present
-        for sel in ['[aria-label="Not Now"]', 'button:has-text("Not Now")']:
+        for sel in ['[aria-label="Not Now"]', 'button:has-text("Not Now")',
+                    'button:has-text("Not now")']:
             try:
-                page.click(sel, timeout=2_000)
+                page.click(sel, timeout=3_000)
+                time.sleep(1)
                 break
             except Exception:
                 pass
@@ -293,6 +350,7 @@ def _fb_login(page, email: str, password: str) -> bool:
 
     except Exception as e:
         print(f"  FB: Login failed — {e}")
+        print(f"  FB: Current URL at failure: {page.url}")
         return False
 
 
@@ -304,13 +362,20 @@ def _scrape_group_posts(page, group_url: str, max_posts: int) -> List[Dict]:
     posts = []
     try:
         print(f"  FB: Loading {group_url} ...")
-        page.goto(group_url, wait_until="domcontentloaded", timeout=30_000)
-        time.sleep(3)
+        page.goto(group_url, wait_until="domcontentloaded", timeout=45_000)
+        time.sleep(4)
+
+        print(f"  FB: Group page URL: {page.url}")
+
+        # Check if we got redirected to login (not authenticated)
+        if '/login' in page.url or 'checkpoint' in page.url:
+            print("  FB: Redirected to login — session not authenticated.")
+            return posts
 
         # Scroll to trigger lazy-loaded posts
-        for _ in range(3):
+        for _ in range(4):
             page.keyboard.press("End")
-            time.sleep(2)
+            time.sleep(2.5)
 
         articles = page.query_selector_all('div[role="article"]')
         print(f"  FB: Found {len(articles)} post articles.")
@@ -375,14 +440,28 @@ def _scrape_all_groups(max_posts: int) -> List[Dict]:
     all_posts = []
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=[
+                    '--no-sandbox',
+                    '--disable-blink-features=AutomationControlled',
+                    '--disable-infobars',
+                    '--disable-dev-shm-usage',
+                ],
+            )
             ctx = browser.new_context(
                 user_agent=(
                     'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
                     'AppleWebKit/537.36 (KHTML, like Gecko) '
-                    'Chrome/122.0.0.0 Safari/537.36'
+                    'Chrome/124.0.0.0 Safari/537.36'
                 ),
-                viewport={'width': 1366, 'height': 768},
+                viewport={'width': 1280, 'height': 900},
+                locale='en-US',
+                timezone_id='America/New_York',
+            )
+            # Mask navigator.webdriver to reduce bot detection
+            ctx.add_init_script(
+                "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
             )
             page = ctx.new_page()
 
