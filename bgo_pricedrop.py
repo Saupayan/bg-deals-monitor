@@ -7,7 +7,7 @@ What it does each run:
   1. Fetches https://www.boardgameoracle.com/pricedrop/daily
   2. Extracts structured game data from the embedded __NEXT_DATA__ JSON
      (the site is Next.js SSR — no Playwright needed)
-  3. Filters to games with BGG rating >= 7.0
+  3. Filters to games with BGG rating >= 7.3
   4. For each qualifying NEW game (not already sent today):
        a. Looks up BGG ID and fetches recent marketplace sold listings
        b. Sends a WhatsApp alert with:
@@ -43,7 +43,7 @@ import whatsapp_notifier
 
 BGO_DAILY_URL    = "https://www.boardgameoracle.com/pricedrop/daily"
 BGO_BASE_URL     = "https://www.boardgameoracle.com"
-BGG_RATING_MIN   = 7.0
+BGG_RATING_MIN   = 7.3          # Only send deals for games rated 7.3+ on BGG
 SENT_STATE_FILE  = Path(__file__).parent / "bgo_sent.json"
 
 HEADERS = {
@@ -179,7 +179,12 @@ def fetch_price_drops() -> List[Dict]:
             detail = item.get('detail', {})
             ps     = item.get('price_stats', {})
 
-            bgg_rating = detail.get('bgg_rating') or 0.0
+            # Explicitly cast to float so a string value, nested dict, or None
+            # from BGO's JSON never silently bypasses the rating filter.
+            try:
+                bgg_rating = float(detail.get('bgg_rating') or 0)
+            except (TypeError, ValueError):
+                bgg_rating = 0.0
             lowest     = ps.get('lowest_price') or 0.0
             day_change = ps.get('price_drop_day_change_value') or 0.0
             day_pct    = ps.get('price_drop_day_change_percent') or 0.0  # negative
@@ -306,7 +311,7 @@ def _research_drop(drop: Dict) -> Optional[Dict]:
 
 def check_bgo_price_drops(force: bool = False) -> None:
     """
-    Fetch BGO daily price drops, filter by BGG rating >= 7.0, and send
+    Fetch BGO daily price drops, filter by BGG rating >= 7.3, and send
     full-detail WhatsApp alerts for new qualifying deals.
 
     force=True: bypass de-duplication (re-send everything that qualifies).

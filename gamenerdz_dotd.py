@@ -677,7 +677,9 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
         if not use_playwright:
             # Playwright isn't available in this workflow — send a thum.io
             # URL-based screenshot so you still see the live page on WhatsApp.
-            thum_url = ("https://image.thum.io/get/noanimate/"
+            # nocache/ forces thum.io to take a fresh screenshot every time
+            # rather than serving a cached one from a previous run.
+            thum_url = ("https://image.thum.io/get/noanimate/nocache/"
                         "https://www.gamenerdz.com/deal-of-the-day")
             print("  Sending thum.io screenshot fallback via WhatsApp...")
             whatsapp_notifier.send_image_whatsapp(

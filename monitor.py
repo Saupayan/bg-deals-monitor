@@ -612,18 +612,20 @@ def run_force_mode() -> None:
         print(f"  GameNerdz DotD error: {e}")
         traceback.print_exc()
 
-    # BGO daily price drops — force=True re-sends all qualifying deals right now
-    print("\n  Checking BGO Daily Price Drops...")
+    # BGO daily price drops — force=False so only NEW deals (not already sent today)
+    # are sent. Re-sending the full research pipeline for every qualifying drop on
+    # every manual trigger is too noisy. You'll still get new ones as they appear.
+    print("\n  Checking BGO Daily Price Drops (new only)...")
     try:
-        bgo_pricedrop.check_bgo_price_drops(force=True)
+        bgo_pricedrop.check_bgo_price_drops(force=False)
     except Exception as e:
         print(f"  BGO price drop error: {e}")
         traceback.print_exc()
 
-    # Tabletop Merchant DotD — force=True bypasses dedup
-    print("\n  Checking Tabletop Merchant Deal of the Day...")
+    # Tabletop Merchant DotD — same logic: only new deals, not a full re-send
+    print("\n  Checking Tabletop Merchant Deal of the Day (new only)...")
     try:
-        ttm_dotd.check_ttm_dotd(force=True)
+        ttm_dotd.check_ttm_dotd(force=False)
     except Exception as e:
         print(f"  Tabletop Merchant DotD error: {e}")
         traceback.print_exc()
@@ -688,7 +690,7 @@ def run_test_mode() -> None:
             # This runs even in the main bgg-monitor.yml workflow where Playwright
             # is not available, because it only requires an HTTP request.
             thum_url = (
-                "https://image.thum.io/get/noanimate/"
+                "https://image.thum.io/get/noanimate/nocache/"
                 "https://www.gamenerdz.com/deal-of-the-day"
             )
             print("  Sending GameNerdz DotD page screenshot via WhatsApp (thum.io)...")
