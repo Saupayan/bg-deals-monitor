@@ -257,10 +257,13 @@ def _make_session() -> "requests.Session":
     # mbasic.facebook.com requires a basic/mobile UA — desktop Chrome triggers
     # a "browser not supported" wall on group pages even when authenticated.
     # An old Android Firefox UA gets plain HTML group content without issues.
+    # Use an older Android WebKit UA — mbasic.facebook.com serves plain HTML
+    # to older mobile browsers. Desktop or modern UAs trigger a browser-wall page.
     s.headers.update({
         'User-Agent': (
-            'Mozilla/5.0 (Android 5.0; Mobile; rv:41.0) '
-            'Gecko/41.0 Firefox/41.0'
+            'Mozilla/5.0 (Linux; U; Android 4.0.3; en-us; KFTT Build/IML74K) '
+            'AppleWebKit/535.19 (KHTML, like Gecko) Silk/3.13 Safari/535.19 '
+            'Silk-Accelerated=true'
         ),
         'Accept-Language': 'en-US,en;q=0.9',
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
@@ -274,7 +277,9 @@ def _make_session() -> "requests.Session":
             for c in cookies:
                 name = c.get('name') or c.get('Name')
                 value = c.get('value') or c.get('Value', '')
-                domain = c.get('domain') or c.get('Domain', '.facebook.com')
+                # Always use .facebook.com domain so cookies apply to ALL
+                # facebook subdomains including mbasic.facebook.com
+                domain = '.facebook.com'
                 if name and value:
                     s.cookies.set(name, value, domain=domain)
                     imported += 1
@@ -300,9 +305,24 @@ def _fb_login_requests(session, email: str, password: str) -> bool:
         r.raise_for_status()
         print(f"  FB: Status {r.status_code}, URL: {r.url}")
 
+        soup = BeautifulSoup(r.text, 'html.parser')
+        page_text = soup.get_text()
+        print(f"  FB: Home page snippet: {page_text[:400]!r}")
+
+        # Detect browser-wall pages — these return 200 but have NO real content.
+        # They fool a naive "no login form = authenticated" check.
+        browser_wall_phrases = [
+            'not available on this browser',
+            'get one of the browsers below',
+            'update your browser',
+            'browser is not supported',
+        ]
+        if any(p in page_text.lower() for p in browser_wall_phrases):
+            print("  FB: Got a browser-wall page — UA not accepted by mbasic. Aborting.")
+            return False
+
         # If we're not on a login page, cookies worked
         if 'login' not in r.url and 'checkpoint' not in r.url:
-            soup = BeautifulSoup(r.text, 'html.parser')
             form = soup.find('form', id='login_form')
             if not form:
                 print("  FB: Already authenticated via cookies.")
@@ -394,8 +414,9 @@ def _scrape_group_requests(session, group_url: str, max_posts: int) -> List[Dict
             print(f"  FB: Page {pages_fetched+1}: found {len(story_divs)} story divs.")
 
             if not story_divs and pages_fetched == 0:
-                text_sample = soup.get_text()[:400]
+                text_sample = soup.get_text()[:800]
                 print(f"  FB: Page text snippet: {text_sample!r}")
+                print(f"  FB: Page URL after redirect: {r.url}")
                 break
 
             for div in story_divs:
