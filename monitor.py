@@ -309,29 +309,35 @@ def run_force_mode() -> None:
             break
         time.sleep(1)  # be polite to BGG between page requests
 
-    # Filter: within 7 days, not a pinned post, and still active
-    live_deals = [
+    # Filter: within 7 days, not a pinned post — include both live AND dead deals
+    week_deals = [
         t for t in all_threads
         if t['subject'].lower().strip() not in SKIP_SUBJECTS
         and _is_within_hours(t['post_date'], hours=7 * 24)
-        and is_active_deal(t['subject'])
     ]
 
     # Sort newest → oldest
-    live_deals.sort(key=lambda t: _parse_thread_date(t['post_date']), reverse=True)
+    week_deals.sort(key=lambda t: _parse_thread_date(t['post_date']), reverse=True)
 
-    print(f"\n  Found {len(live_deals)} live deal(s) from the last 7 days.")
+    live_count = sum(1 for t in week_deals if is_active_deal(t['subject']))
+    dead_count = len(week_deals) - live_count
+    print(f"\n  Found {len(week_deals)} deal(s) from the last 7 days "
+          f"({live_count} live, {dead_count} expired/dead).")
 
     # Build compact WhatsApp message
-    if not live_deals:
+    if not week_deals:
         msg = (
-            f"🎲 *BGG Hot Deals — live deals (last 7 days)*\n\n"
-            f"No active deals found right now.\n\n"
+            f"🎲 *BGG Hot Deals — last 7 days*\n\n"
+            f"No deals found in the last 7 days.\n\n"
             f"_Checked at {now_str}_"
         )
     else:
-        lines = [f"🎲 *BGG Hot Deals — {len(live_deals)} live deal(s)*", ""]
-        for t in live_deals:
+        lines = [
+            f"🎲 *BGG Hot Deals — last 7 days*",
+            f"_{live_count} live · {dead_count} expired_",
+            "",
+        ]
+        for t in week_deals:
             game_name = extract_game_name(t['subject']) or t['subject']
             thread_url = (f"https://boardgamegeek.com/thread/{t['id']}"
                           if t.get('id') else '')
@@ -341,7 +347,8 @@ def run_force_mode() -> None:
                 age_str = f"{age_h}h ago" if age_h < 48 else f"{age_h // 24}d ago"
             except Exception:
                 age_str = ""
-            lines.append(f"• *{game_name}* ({age_str})")
+            status = "🟢" if is_active_deal(t['subject']) else "🔴"
+            lines.append(f"{status} *{game_name}* ({age_str})")
             if thread_url:
                 lines.append(f"  {thread_url}")
         lines.append("")
