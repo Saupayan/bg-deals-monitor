@@ -20,8 +20,14 @@ CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', '15'))
 
 # --- Deal Filtering ---
 # Minimum BGG community rating for a game to trigger a WhatsApp alert.
-# Applied uniformly across all deal sources (BGG Hot Deals, GameNerdz, TTM, BGO).
-BGG_MIN_RATING = float(os.getenv('BGG_MIN_RATING', '7.0'))
+# Two thresholds apply depending on how the monitor is triggered:
+#   FORCE (manual / WhatsApp trigger): lower bar — you asked for it, show more.
+#   AUTO  (scheduled runs):            higher bar — only the best deals alert you.
+BGG_MIN_RATING_FORCE = float(os.getenv('BGG_MIN_RATING_FORCE', '7.0'))
+BGG_MIN_RATING_AUTO  = float(os.getenv('BGG_MIN_RATING_AUTO',  '7.5'))
+
+# Legacy alias — used as fallback default in enrichment.enrich_game()
+BGG_MIN_RATING = BGG_MIN_RATING_AUTO
 
 # --- WhatsApp (Green API) ---
 GREEN_API_INSTANCE_ID = os.getenv('GREEN_API_INSTANCE_ID', '')

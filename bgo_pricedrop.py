@@ -224,7 +224,7 @@ def fetch_price_drops() -> List[Dict]:
 # LIGHTWEIGHT RESEARCH PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _research_drop_compact(drop: Dict) -> Optional[Dict]:
+def _research_drop_compact(drop: Dict, min_bgg_rating: float = None) -> Optional[Dict]:
     """
     Run the unified BGG enrichment pipeline for a qualifying BGO price drop.
 
@@ -233,13 +233,21 @@ def _research_drop_compact(drop: Dict) -> Optional[Dict]:
     format fast. Retail prices are included for comparison.
 
     Returns None if the game is below the rating threshold or not on BGG.
+
+    min_bgg_rating: pass config.BGG_MIN_RATING_FORCE (7.0) for manual triggers,
+                    config.BGG_MIN_RATING_AUTO (7.5) for scheduled runs.
     """
+    import config as _cfg
+    if min_bgg_rating is None:
+        min_bgg_rating = _cfg.BGG_MIN_RATING_AUTO
+
     game_name = drop['title']
     print(f"  BGO: Researching '{game_name}'...")
 
     enriched = enrichment.enrich_game(
         game_name,
         filter_by_rating=True,
+        min_bgg_rating=min_bgg_rating,
         include_reviews=False,   # BGO compact format doesn't show reviews
     )
     if enriched is None:
@@ -331,7 +339,10 @@ def check_bgo_price_drops(force: bool = False) -> None:
         print("  BGO: All qualifying drops already sent today.")
         return
 
-    print(f"  BGO: Researching {len(new_alerts)} new qualifying drop(s)...")
+    import config as _cfg
+    threshold = _cfg.BGG_MIN_RATING_FORCE if force else _cfg.BGG_MIN_RATING_AUTO
+    print(f"  BGO: Researching {len(new_alerts)} new qualifying drop(s) "
+          f"(BGG threshold: {threshold})...")
 
     deal_lines: List[str] = []
     for drop in new_alerts:
@@ -339,7 +350,7 @@ def check_bgo_price_drops(force: bool = False) -> None:
             print(f"\n  BGO: Processing '{drop['title']}' "
                   f"(BGG {drop['bgg_rating']}, -{drop['discount_pct']:.0f}%)")
 
-            researched = _research_drop_compact(drop)
+            researched = _research_drop_compact(drop, min_bgg_rating=threshold)
             if not researched:
                 continue
 

@@ -153,17 +153,29 @@ def fetch_dotd() -> Optional[Dict]:
 # FULL RESEARCH PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _research_deal(dotd: Dict) -> Optional[Dict]:
+def _research_deal(dotd: Dict, min_bgg_rating: float = None) -> Optional[Dict]:
     """
     Run the unified BGG enrichment pipeline for a TTM deal.
     Returns None if the game is below the rating threshold or not found on BGG.
 
     Uses enrichment.enrich_game() — the same pipeline as all other sources.
+
+    min_bgg_rating: pass config.BGG_MIN_RATING_FORCE (7.0) for manual triggers,
+                    config.BGG_MIN_RATING_AUTO (7.5) for scheduled runs.
     """
+    import config as _cfg
+    if min_bgg_rating is None:
+        min_bgg_rating = _cfg.BGG_MIN_RATING_AUTO
+
     game_name = dotd['clean_name']
     print(f"  TTM: Researching '{game_name}'...")
 
-    enriched = enrichment.enrich_game(game_name, filter_by_rating=True, include_reviews=True)
+    enriched = enrichment.enrich_game(
+        game_name,
+        filter_by_rating=True,
+        min_bgg_rating=min_bgg_rating,
+        include_reviews=True,
+    )
     if enriched is None:
         return None
 
@@ -206,7 +218,9 @@ def check_ttm_dotd(force: bool = False) -> None:
             print(f"  TTM: '{dotd['clean_name']}' already sent today — skipping.")
             return
 
-    deal = _research_deal(dotd)
+    import config as _cfg
+    threshold = _cfg.BGG_MIN_RATING_FORCE if force else _cfg.BGG_MIN_RATING_AUTO
+    deal = _research_deal(dotd, min_bgg_rating=threshold)
     if not deal:
         # Below rating threshold or not on BGG — mark sent to avoid re-checking,
         # and send a screenshot so the user can see the deal and decide.

@@ -133,10 +133,11 @@ def research_thread(thread: dict) -> Optional[Dict]:
         return None
     print(f"    Game name: '{game_name}'")
 
-    # Steps 2–6: unified enrichment pipeline
+    # Steps 2–6: unified enrichment pipeline (auto mode → stricter threshold)
     enriched = enrichment.enrich_game(
         game_name,
         filter_by_rating=True,
+        min_bgg_rating=config.BGG_MIN_RATING_AUTO,
         include_reviews=True,
     )
 
@@ -532,11 +533,12 @@ def run_force_mode() -> None:
 
         print(f"  Researching: '{game_name}'")
 
-        # Unified enrichment pipeline — same steps as all other sources.
-        # Rating filter always applied: games below config.BGG_MIN_RATING are skipped.
+        # Unified enrichment pipeline — force mode uses the lower 7.0 threshold
+        # (you asked for everything worth seeing; auto mode is stricter at 7.5).
         enriched = enrichment.enrich_game(
             game_name,
             filter_by_rating=True,
+            min_bgg_rating=config.BGG_MIN_RATING_FORCE,
             include_reviews=False,   # force mode is compact — no reviews needed
             num_listings=10,         # show more options for comparison
         )

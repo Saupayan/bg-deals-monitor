@@ -529,7 +529,7 @@ def _deep_find(obj, key: str, depth: int = 0):
 # FULL RESEARCH PIPELINE
 # âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
-def research_dotd(dotd: Dict) -> Optional[Dict]:
+def research_dotd(dotd: Dict, min_bgg_rating: float = None) -> Optional[Dict]:
     """
     Run the unified BGG enrichment pipeline for a GameNerdz DotD item.
     Returns a deal dict ready for emailer.send_deal_alert(), or None.
@@ -537,7 +537,15 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     Uses enrichment.enrich_game() — the same pipeline as all other sources.
     Falls back to a thum.io screenshot if the game can't be found or fails
     the rating threshold.
+
+    min_bgg_rating: pass config.BGG_MIN_RATING_FORCE (7.0) for manual triggers,
+                    config.BGG_MIN_RATING_AUTO (7.5) for scheduled runs.
+                    Defaults to config.BGG_MIN_RATING_AUTO when not specified.
     """
+    import config as _cfg
+    if min_bgg_rating is None:
+        min_bgg_rating = _cfg.BGG_MIN_RATING_AUTO
+
     raw_name = dotd['name']
 
     # Clean up the name (strip edition suffixes, etc.)
@@ -545,7 +553,12 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     print(f"  Game name (cleaned): '{game_name}'")
 
     # Unified enrichment pipeline
-    enriched = enrichment.enrich_game(game_name, filter_by_rating=True, include_reviews=True)
+    enriched = enrichment.enrich_game(
+        game_name,
+        filter_by_rating=True,
+        min_bgg_rating=min_bgg_rating,
+        include_reviews=True,
+    )
 
     if enriched is None:
         # Below threshold or not on BGG — screenshot fallback handled by
@@ -641,7 +654,9 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
             )
         return
 
-    deal = research_dotd(dotd)
+    import config as _cfg
+    threshold = _cfg.BGG_MIN_RATING_FORCE if force else _cfg.BGG_MIN_RATING_AUTO
+    deal = research_dotd(dotd, min_bgg_rating=threshold)
     if not deal:
         print("  Research pipeline returned nothing (below threshold or not on BGG).")
         # Send a screenshot so the user can still see the deal
