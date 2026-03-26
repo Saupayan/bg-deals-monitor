@@ -2,7 +2,7 @@ name: Board Game Deals Monitor
 
 on:
   schedule:
-    - cron: '*/15 * * * *'   # Every 15 minutes
+    - cron: '0 * * * *'   # Every hour (on the hour)
   workflow_dispatch:          # Allows manual trigger from GitHub UI
   repository_dispatch:        # Allows trigger via GitHub API (e.g. from WhatsApp bot)
     types: [check-deals]
