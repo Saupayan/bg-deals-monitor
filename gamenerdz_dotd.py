@@ -529,40 +529,33 @@ def _deep_find(obj, key: str, depth: int = 0):
 # FULL RESEARCH PIPELINE
 # âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
-def research_dotd(dotd: Dict, min_bgg_rating: float = None) -> Optional[Dict]:
+def research_dotd(dotd: Dict) -> Optional[Dict]:
     """
     Run the unified BGG enrichment pipeline for a GameNerdz DotD item.
     Returns a deal dict ready for emailer.send_deal_alert(), or None.
 
-    Uses enrichment.enrich_game() — the same pipeline as all other sources.
-    Falls back to a thum.io screenshot if the game can't be found or fails
-    the rating threshold.
-
-    min_bgg_rating: pass config.BGG_MIN_RATING_FORCE (7.0) for manual triggers,
-                    config.BGG_MIN_RATING_AUTO (7.5) for scheduled runs.
-                    Defaults to config.BGG_MIN_RATING_AUTO when not specified.
+    Always attempts enrichment regardless of BGG rating — GameNerdz DotD is a
+    curated daily deal and you always want to see it. A low-rating note is
+    added to the WhatsApp message when rating < config.BGG_MIN_RATING_AUTO.
     """
-    import config as _cfg
-    if min_bgg_rating is None:
-        min_bgg_rating = _cfg.BGG_MIN_RATING_AUTO
-
     raw_name = dotd['name']
 
     # Clean up the name (strip edition suffixes, etc.)
     game_name = extract_game_name(raw_name) or raw_name
     print(f"  Game name (cleaned): '{game_name}'")
 
-    # Unified enrichment pipeline
+    # Unified enrichment pipeline.
+    # filter_by_rating=False because GameNerdz DotD is a curated daily deal —
+    # you always want to see it regardless of BGG rating. The rating is shown
+    # in the message with a ⚠️ note so you can judge for yourself.
     enriched = enrichment.enrich_game(
         game_name,
-        filter_by_rating=True,
-        min_bgg_rating=min_bgg_rating,
+        filter_by_rating=False,
         include_reviews=True,
     )
 
     if enriched is None:
-        # Below threshold or not on BGG — screenshot fallback handled by
-        # check_gamenerdz_dotd() which already has thum.io / Playwright fallback.
+        # Only happens on a hard failure (shouldn't occur with filter_by_rating=False)
         return None
 
     # Build the thread-like dict so emailer can use the same template
@@ -655,15 +648,14 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
         return
 
     import config as _cfg
-    threshold = _cfg.BGG_MIN_RATING_FORCE if force else _cfg.BGG_MIN_RATING_AUTO
-    deal = research_dotd(dotd, min_bgg_rating=threshold)
+    deal = research_dotd(dotd)
     if not deal:
-        print("  Research pipeline returned nothing (below threshold or not on BGG).")
-        # Send a screenshot so the user can still see the deal
+        # Hard enrichment failure — send screenshot fallback
+        print("  Research pipeline returned nothing.")
         enrichment.send_screenshot_fallback(
             dotd.get('url', GAMENERDZ_DOTD_URL),
             f"🏪 GameNerdz Deal of the Day: {dotd['name']} — {dotd['price_str']}\n"
-            f"⚠️ Below rating threshold or not on BGG.\n"
+            f"⚠️ Could not look up BGG info.\n"
             f"🔗 {dotd.get('url', GAMENERDZ_DOTD_URL)}",
         )
         return
@@ -671,8 +663,14 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
     print(f"\n  Sending GameNerdz DotD alert for '{dotd['name']}'...")
     sent = emailer.send_consolidated_alert([deal])
 
+    # Add a low-rating warning if BGG score is below the auto threshold
+    bgg_rating = (deal.get('game_details') or {}).get('average_rating') or 0.0
+    rating_warning = ''
+    if bgg_rating and bgg_rating < _cfg.BGG_MIN_RATING_AUTO:
+        rating_warning = f'\n⚠️ BGG rating {bgg_rating:.1f} is below our usual {_cfg.BGG_MIN_RATING_AUTO} threshold — decide for yourself!'
+
     # WhatsApp — full-detail message with all research fields
-    price_line = f"🏷 *GameNerdz: {deal['dotd_price']}*"
+    price_line = f"🏷 *GameNerdz: {deal['dotd_price']}*{rating_warning}"
     msg = whatsapp_notifier.format_full_deal(
         source_header    = '🎪 *GameNerdz Deal of the Day*',
         deal_price_line  = price_line,

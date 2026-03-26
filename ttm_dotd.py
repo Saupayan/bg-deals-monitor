@@ -153,27 +153,22 @@ def fetch_dotd() -> Optional[Dict]:
 # FULL RESEARCH PIPELINE
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _research_deal(dotd: Dict, min_bgg_rating: float = None) -> Optional[Dict]:
+def _research_deal(dotd: Dict) -> Optional[Dict]:
     """
     Run the unified BGG enrichment pipeline for a TTM deal.
-    Returns None if the game is below the rating threshold or not found on BGG.
-
-    Uses enrichment.enrich_game() — the same pipeline as all other sources.
-
-    min_bgg_rating: pass config.BGG_MIN_RATING_FORCE (7.0) for manual triggers,
-                    config.BGG_MIN_RATING_AUTO (7.5) for scheduled runs.
+    Always attempts enrichment (no rating filter) because TTM DotD is a
+    curated daily deal — you always want to see it.
+    A low-rating note is added to the message if rating < BGG_MIN_RATING_AUTO.
     """
-    import config as _cfg
-    if min_bgg_rating is None:
-        min_bgg_rating = _cfg.BGG_MIN_RATING_AUTO
-
     game_name = dotd['clean_name']
     print(f"  TTM: Researching '{game_name}'...")
 
+    # filter_by_rating=False because TTM DotD is a curated daily deal —
+    # you always want to see it. A low-rating note is added to the message
+    # in check_ttm_dotd() so you can judge for yourself.
     enriched = enrichment.enrich_game(
         game_name,
-        filter_by_rating=True,
-        min_bgg_rating=min_bgg_rating,
+        filter_by_rating=False,
         include_reviews=True,
     )
     if enriched is None:
@@ -219,28 +214,30 @@ def check_ttm_dotd(force: bool = False) -> None:
             return
 
     import config as _cfg
-    threshold = _cfg.BGG_MIN_RATING_FORCE if force else _cfg.BGG_MIN_RATING_AUTO
-    deal = _research_deal(dotd, min_bgg_rating=threshold)
+    deal = _research_deal(dotd)
     if not deal:
-        # Below rating threshold or not on BGG — mark sent to avoid re-checking,
-        # and send a screenshot so the user can see the deal and decide.
+        # Hard enrichment failure (shouldn't happen with filter_by_rating=False)
         if not force:
             _mark_sent(dotd['handle'])
         enrichment.send_screenshot_fallback(
             dotd.get('url', TTM_DOTD_PAGE),
             f"🏪 Tabletop Merchant Deal of the Day: {dotd['clean_name']}\n"
-            f"💰 ${dotd['deal_price']:.2f}"
-            + (f" (was ${dotd['was_price']:.2f}, -{dotd['discount_pct']:.0f}%)"
-               if dotd.get('was_price') else '')
-            + f"\n⚠️ Below rating threshold or not on BGG.\n"
+            f"💰 ${dotd['deal_price']:.2f}\n"
+            f"⚠️ Could not look up BGG info.\n"
             f"🔗 {dotd.get('url', TTM_DOTD_PAGE)}",
         )
         return
 
+    # Add a low-rating warning if BGG score is below the auto threshold
+    bgg_rating = (deal.get('game_details') or {}).get('average_rating') or 0.0
+    rating_warning = ''
+    if bgg_rating and bgg_rating < _cfg.BGG_MIN_RATING_AUTO:
+        rating_warning = f'\n⚠️ BGG rating {bgg_rating:.1f} — below our usual {_cfg.BGG_MIN_RATING_AUTO} threshold'
+
     # Build price line
     disc_str  = f", -{deal['discount_pct']:.0f}%" if deal['discount_pct'] else ''
     was_str   = f"  (was ${deal['was_price']:.2f}{disc_str})" if deal['was_price'] else ''
-    price_line = f"🏷 *Now: ${deal['deal_price']:.2f}*{was_str}  —  Tabletop Merchant"
+    price_line = f"🏷 *Now: ${deal['deal_price']:.2f}*{was_str}  —  Tabletop Merchant{rating_warning}"
 
     msg = whatsapp_notifier.format_full_deal(
         source_header    = '🏪 *Tabletop Merchant — Deal of the Day*',
