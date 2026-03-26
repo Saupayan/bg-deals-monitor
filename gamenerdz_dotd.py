@@ -554,7 +554,7 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     )
 
     if enriched is None:
-        # Only happens on a hard failure (shouldn't occur with filter_by_rating=False)
+        # Game is below the rating threshold or couldn't be found on BGG.
         return None
 
     # Build the thread-like dict so emailer can use the same template
@@ -627,13 +627,12 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
 
     if not dotd:
         print("  No DotD found — may not be posted yet or page changed.")
-        if not use_playwright:
-            # Playwright isn't available in this workflow — send a thum.io
-            # URL-based screenshot so you still see the live page on WhatsApp.
-            # Adding a Unix timestamp as a query param to the target URL forces
-            # thum.io to treat it as a brand-new URL every run, bypassing both
-            # their app cache and CDN edge cache. nocache/ is a belt-and-suspenders
-            # extra layer. GameNerdz ignores the unknown _t param.
+        # Send a thum.io fallback unless Playwright already sent a screenshot.
+        # We check for the actual file rather than the use_playwright flag because
+        # Playwright can crash before saving the file — in that case we'd get
+        # nothing if we relied on the flag alone.
+        pw_screenshot_sent = Path('/tmp/gn_dotd.png').exists()
+        if not pw_screenshot_sent:
             _ts = int(time.time())
             thum_url = ("https://image.thum.io/get/noanimate/nocache/"
                         f"https://www.gamenerdz.com/deal-of-the-day?_t={_ts}")
@@ -649,12 +648,13 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
     import config as _cfg
     deal = research_dotd(dotd)
     if not deal:
-        # Hard enrichment failure — send screenshot fallback
-        print("  Research pipeline returned nothing.")
+        # Game was either below the BGG rating threshold or couldn't be found on
+        # BGG at all — send a screenshot so you can still see today's deal.
+        print("  Research pipeline returned nothing (below threshold or BGG miss).")
         enrichment.send_screenshot_fallback(
             dotd.get('url', GAMENERDZ_DOTD_URL),
             f"🏪 GameNerdz Deal of the Day: {dotd['name']} — {dotd['price_str']}\n"
-            f"⚠️ Could not look up BGG info.\n"
+            f"⚠️ Skipped (BGG rating below threshold or not found).\n"
             f"🔗 {dotd.get('url', GAMENERDZ_DOTD_URL)}",
         )
         return
