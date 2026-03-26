@@ -45,8 +45,7 @@ import schedule
 
 import config
 import bgg_api
-import marketplace
-import price_checker
+import enrichment
 import emailer
 import whatsapp_notifier
 import gamenerdz_dotd
@@ -119,6 +118,10 @@ def research_thread(thread: dict) -> Optional[Dict]:
     """
     Run the full research pipeline for one deal thread.
     Returns a deal dict ready for emailer, or None if the thread should be skipped.
+
+    Uses enrichment.enrich_game() — the unified pipeline shared by all sources.
+    If the game can't be found on BGG or fails the rating threshold, a screenshot
+    of the BGG thread is sent as a fallback before returning None.
     """
     title = thread['subject']
     print(f"\n  Processing: '{title}'")
@@ -130,63 +133,32 @@ def research_thread(thread: dict) -> Optional[Dict]:
         return None
     print(f"    Game name: '{game_name}'")
 
-    # Step 2: BGG lookup
-    print(f"    Looking up '{game_name}' on BGG...")
-    bgg_id = bgg_api.search_game(game_name)
-    game_details = None
+    # Steps 2–6: unified enrichment pipeline
+    enriched = enrichment.enrich_game(
+        game_name,
+        filter_by_rating=True,
+        include_reviews=True,
+    )
 
-    if bgg_id:
-        print(f"    BGG ID: {bgg_id}")
-        time.sleep(1)
-        game_details = bgg_api.get_game_details(bgg_id)
-        if game_details:
-            print(f"    Details: '{game_details['name']}' | "
-                  f"Rating: {game_details['average_rating']} | "
-                  f"Weight: {game_details['weight']} | "
-                  f"Best at: {game_details['best_players']}p")
-    else:
-        print(f"    Not found on BGG. Will include with limited info.")
-
-    # Step 3: BGG Marketplace sold listings
-    sold_listings = []
-    if bgg_id:
-        print(f"    Fetching BGG marketplace sold listings (USA)...")
-        time.sleep(1)
-        sold_listings = marketplace.get_sold_listings(bgg_id, num_listings=5)
-        print(f"    Found {len(sold_listings)} sold listing(s)")
-
-    # Step 4: Retail prices
-    retail_prices = []
-    name_for_search = (game_details or {}).get('name', game_name)
-    print(f"    Checking retail prices for '{name_for_search}'...")
-    try:
-        retail_prices = price_checker.get_all_prices(name_for_search, bgg_id or '')
-        if retail_prices:
-            print(f"    Found {len(retail_prices)} price(s). "
-                  f"Cheapest: {retail_prices[0]['store']} @ {retail_prices[0]['price_str']}")
-        else:
-            print(f"    No retail prices found")
-    except Exception as e:
-        print(f"    Price check error: {e}")
-
-    # Step 5: BGG reviews
-    reviews = {'positive': [], 'negative': []}
-    if bgg_id:
-        print(f"    Fetching community reviews...")
-        time.sleep(1)
-        try:
-            reviews = bgg_api.get_game_reviews(bgg_id)
-            print(f"    Reviews: {len(reviews.get('positive',[]))} positive, "
-                  f"{len(reviews.get('negative',[]))} negative")
-        except Exception as e:
-            print(f"    Reviews error: {e}")
+    if enriched is None:
+        # Below rating threshold or not found on BGG — send a screenshot so
+        # the user can still see the deal post and decide for themselves.
+        thread_url = (f"https://boardgamegeek.com/thread/{thread['id']}"
+                      if thread.get('id') else '')
+        if thread_url:
+            enrichment.send_screenshot_fallback(
+                thread_url,
+                f"🎲 BGG Hot Deal (below threshold or not on BGG):\n"
+                f"_{title}_\n🔗 {thread_url}",
+            )
+        return None
 
     return dict(
         thread        = thread,
-        game_details  = game_details,
-        sold_listings = sold_listings,
-        retail_prices = retail_prices,
-        reviews       = reviews,
+        game_details  = enriched['game_details'],
+        sold_listings = enriched['sold_listings'],
+        retail_prices = enriched['retail_prices'],
+        reviews       = enriched['reviews'],
     )
 
 
@@ -559,26 +531,18 @@ def run_force_mode() -> None:
             continue
 
         print(f"  Researching: '{game_name}'")
-        retail_prices = []
-        sold_listings = []
 
-        # Retail prices via Board Game Oracle (game name search, no BGG ID needed)
-        try:
-            retail_prices = price_checker.get_all_prices(game_name, '')
-        except Exception as e:
-            print(f"    Price check error: {e}")
-
-        # BGG Marketplace sold + current listings (both need BGG ID)
-        current_listings = []
-        try:
-            bgg_id = bgg_api.search_game(game_name)
-            if bgg_id:
-                time.sleep(0.5)
-                sold_listings = marketplace.get_sold_listings(bgg_id, num_listings=5)
-                time.sleep(0.5)
-                current_listings = marketplace.get_current_listings(bgg_id, num_listings=10)
-        except Exception as e:
-            print(f"    Marketplace error: {e}")
+        # Unified enrichment pipeline — same steps as all other sources.
+        # Rating filter always applied: games below config.BGG_MIN_RATING are skipped.
+        enriched = enrichment.enrich_game(
+            game_name,
+            filter_by_rating=True,
+            include_reviews=False,   # force mode is compact — no reviews needed
+            num_listings=10,         # show more options for comparison
+        )
+        retail_prices    = (enriched or {}).get('retail_prices', [])
+        sold_listings    = (enriched or {}).get('sold_listings', [])
+        current_listings = (enriched or {}).get('current_listings', [])
 
         deal_cards[thread['id']] = _format_deal_card(
             thread, game_name, retail_prices, sold_listings, current_listings

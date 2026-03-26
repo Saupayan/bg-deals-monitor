@@ -31,9 +31,7 @@ from typing import Optional, Dict, List
 
 import requests
 
-import bgg_api
-import marketplace
-import price_checker
+import enrichment
 import whatsapp_notifier
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -44,7 +42,7 @@ TTM_COLLECTION_JSON = (
     "https://tabletopmerchant.com/collections/deal-of-the-day/products.json"
 )
 TTM_PRODUCT_BASE    = "https://tabletopmerchant.com/products"
-BGG_RATING_MIN      = 7.0
+TTM_DOTD_PAGE       = "https://tabletopmerchant.com/collections/deal-of-the-day"
 SENT_STATE_FILE     = Path(__file__).parent / "ttm_sent.json"
 
 HEADERS = {
@@ -157,94 +155,27 @@ def fetch_dotd() -> Optional[Dict]:
 
 def _research_deal(dotd: Dict) -> Optional[Dict]:
     """
-    Full research pipeline for a TTM deal:
-      1. BGG lookup (rating, rank, weight, players)
-      2. Filter: BGG rating >= 7.0
-      3. BGG marketplace current USA listings
-      4. BGG marketplace recently sold USA prices
-      5. Retail prices across US stores
-      6. Community reviews (positive + negative)
-    Returns an enriched dict, or None if BGG rating < 7.0.
+    Run the unified BGG enrichment pipeline for a TTM deal.
+    Returns None if the game is below the rating threshold or not found on BGG.
+
+    Uses enrichment.enrich_game() — the same pipeline as all other sources.
     """
     game_name = dotd['clean_name']
+    print(f"  TTM: Researching '{game_name}'...")
 
-    # ── Step 1: BGG lookup ────────────────────────────────────────────────────
-    print(f"  TTM: Looking up '{game_name}' on BGG...")
-    bgg_id       = bgg_api.search_game(game_name)
-    game_details = None
-    bgg_rating   = 0.0
-
-    if bgg_id:
-        time.sleep(1)
-        game_details = bgg_api.get_game_details(bgg_id)
-        if game_details:
-            bgg_rating = game_details.get('average_rating') or 0.0
-            print(f"  TTM: BGG — '{game_details['name']}' | "
-                  f"Rating: {bgg_rating:.1f} | "
-                  f"Rank: {game_details.get('bgg_rank', 'N/A')} | "
-                  f"Weight: {game_details.get('weight', '?')} | "
-                  f"Best: {game_details.get('best_players', '?')}p")
-    else:
-        print(f"  TTM: '{game_name}' not found on BGG.")
-
-    # ── Step 2: Rating filter ─────────────────────────────────────────────────
-    if bgg_rating < BGG_RATING_MIN:
-        print(f"  TTM: BGG rating {bgg_rating:.1f} < {BGG_RATING_MIN} — skipping.")
+    enriched = enrichment.enrich_game(game_name, filter_by_rating=True, include_reviews=True)
+    if enriched is None:
         return None
-
-    # ── Step 3: BGG marketplace current listings ──────────────────────────────
-    current_listings: List[Dict] = []
-    if bgg_id:
-        print(f"  TTM: Fetching BGG marketplace current listings (USA)...")
-        time.sleep(1)
-        try:
-            current_listings = marketplace.get_current_listings(bgg_id, num_listings=5)
-            print(f"  TTM: Found {len(current_listings)} current listing(s).")
-        except Exception as e:
-            print(f"  TTM: Current listings error — {e}")
-
-    # ── Step 4: BGG marketplace recently sold ─────────────────────────────────
-    sold_listings: List[Dict] = []
-    if bgg_id:
-        print(f"  TTM: Fetching BGG marketplace sold listings (USA)...")
-        time.sleep(1)
-        try:
-            sold_listings = marketplace.get_sold_listings(bgg_id, num_listings=5)
-            print(f"  TTM: Found {len(sold_listings)} sold listing(s).")
-        except Exception as e:
-            print(f"  TTM: Sold listings error — {e}")
-
-    # ── Step 5: Retail prices ─────────────────────────────────────────────────
-    name_for_search = (game_details or {}).get('name', game_name)
-    retail_prices: List[Dict] = []
-    print(f"  TTM: Checking retail prices for '{name_for_search}'...")
-    try:
-        retail_prices = price_checker.get_all_prices(name_for_search, bgg_id or '')
-        print(f"  TTM: Found {len(retail_prices)} retail price(s).")
-    except Exception as e:
-        print(f"  TTM: Retail prices error — {e}")
-
-    # ── Step 6: Community reviews ─────────────────────────────────────────────
-    reviews: Dict = {'positive': [], 'negative': []}
-    if bgg_id:
-        print(f"  TTM: Fetching community reviews...")
-        time.sleep(1)
-        try:
-            reviews = bgg_api.get_game_reviews(bgg_id)
-            print(f"  TTM: {len(reviews.get('positive', []))} positive, "
-                  f"{len(reviews.get('negative', []))} negative review(s).")
-        except Exception as e:
-            print(f"  TTM: Reviews error — {e}")
 
     return {
         **dotd,
-        'bgg_id':           bgg_id,
-        'game_details':     game_details,
-        'bgg_rating':       bgg_rating,
-        'current_listings': current_listings,
-        'sold_listings':    sold_listings,
-        'retail_prices':    retail_prices,
-        'reviews':          reviews,
+        'bgg_id':           enriched['bgg_id'],
+        'game_details':     enriched['game_details'],
+        'bgg_rating':       (enriched.get('game_details') or {}).get('average_rating') or 0.0,
+        'current_listings': enriched['current_listings'],
+        'sold_listings':    enriched['sold_listings'],
+        'retail_prices':    enriched['retail_prices'],
+        'reviews':          enriched['reviews'],
     }
 
 
@@ -277,9 +208,19 @@ def check_ttm_dotd(force: bool = False) -> None:
 
     deal = _research_deal(dotd)
     if not deal:
-        # Below rating threshold — mark sent so we don't re-research every 15 min
+        # Below rating threshold or not on BGG — mark sent to avoid re-checking,
+        # and send a screenshot so the user can see the deal and decide.
         if not force:
             _mark_sent(dotd['handle'])
+        enrichment.send_screenshot_fallback(
+            dotd.get('url', TTM_DOTD_PAGE),
+            f"🏪 Tabletop Merchant Deal of the Day: {dotd['clean_name']}\n"
+            f"💰 ${dotd['deal_price']:.2f}"
+            + (f" (was ${dotd['was_price']:.2f}, -{dotd['discount_pct']:.0f}%)"
+               if dotd.get('was_price') else '')
+            + f"\n⚠️ Below rating threshold or not on BGG.\n"
+            f"🔗 {dotd.get('url', TTM_DOTD_PAGE)}",
+        )
         return
 
     # Build price line

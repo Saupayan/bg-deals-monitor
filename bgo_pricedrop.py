@@ -32,8 +32,7 @@ from typing import Optional, List, Dict
 import requests
 from bs4 import BeautifulSoup
 
-import bgg_api
-import marketplace
+import enrichment
 import whatsapp_notifier
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -42,7 +41,10 @@ import whatsapp_notifier
 
 BGO_DAILY_URL    = "https://www.boardgameoracle.com/pricedrop/daily"
 BGO_BASE_URL     = "https://www.boardgameoracle.com"
-BGG_RATING_MIN   = 7.3          # Only send deals for games rated 7.3+ on BGG
+# Pre-filter using BGO's own rating field before running the full BGG lookup.
+# This avoids unnecessary API calls for clearly low-rated games.
+# The unified enrichment pipeline will re-confirm with BGG's live rating.
+BGO_PREFILTER_RATING = 7.3
 SENT_STATE_FILE  = Path(__file__).parent / "bgo_sent.json"
 
 HEADERS = {
@@ -224,45 +226,31 @@ def fetch_price_drops() -> List[Dict]:
 
 def _research_drop_compact(drop: Dict) -> Optional[Dict]:
     """
-    Lightweight research for a qualifying BGO price drop.
-    Only fetches what's needed for the compact one-liner format:
-      1. BGG lookup — for best_players, weight, and confirmed rating
-      2. BGG marketplace current USA listings (asking prices)
-      3. BGG marketplace recently sold USA prices
-    No retail price check, no community reviews.
+    Run the unified BGG enrichment pipeline for a qualifying BGO price drop.
+
+    Uses enrichment.enrich_game() — the same pipeline as all other sources.
+    Reviews are skipped (include_reviews=False) to keep the compact one-liner
+    format fast. Retail prices are included for comparison.
+
+    Returns None if the game is below the rating threshold or not on BGG.
     """
     game_name = drop['title']
+    print(f"  BGO: Researching '{game_name}'...")
 
-    print(f"  BGO: Looking up '{game_name}' on BGG...")
-    bgg_id       = bgg_api.search_game(game_name)
-    game_details = None
-
-    if bgg_id:
-        time.sleep(1)
-        game_details = bgg_api.get_game_details(bgg_id)
-    else:
-        print(f"  BGO: '{game_name}' not found on BGG — using BGO data only.")
-
-    current_listings: List[Dict] = []
-    sold_listings: List[Dict] = []
-    if bgg_id:
-        time.sleep(1)
-        try:
-            current_listings = marketplace.get_current_listings(bgg_id, num_listings=5)
-        except Exception as e:
-            print(f"  BGO: Current listings error — {e}")
-        time.sleep(1)
-        try:
-            sold_listings = marketplace.get_sold_listings(bgg_id, num_listings=5)
-        except Exception as e:
-            print(f"  BGO: Sold listings error — {e}")
+    enriched = enrichment.enrich_game(
+        game_name,
+        filter_by_rating=True,
+        include_reviews=False,   # BGO compact format doesn't show reviews
+    )
+    if enriched is None:
+        return None
 
     return {
         **drop,
-        'bgg_id':           bgg_id,
-        'game_details':     game_details,
-        'current_listings': current_listings,
-        'sold_listings':    sold_listings,
+        'bgg_id':           enriched['bgg_id'],
+        'game_details':     enriched['game_details'],
+        'current_listings': enriched['current_listings'],
+        'sold_listings':    enriched['sold_listings'],
     }
 
 
@@ -329,8 +317,8 @@ def check_bgo_price_drops(force: bool = False) -> None:
         print("  BGO: No price drops fetched.")
         return
 
-    qualifying = [d for d in drops if d['bgg_rating'] >= BGG_RATING_MIN]
-    print(f"  BGO: {len(drops)} drops total, {len(qualifying)} with BGG rating >= {BGG_RATING_MIN}")
+    qualifying = [d for d in drops if d['bgg_rating'] >= BGO_PREFILTER_RATING]
+    print(f"  BGO: {len(drops)} drops total, {len(qualifying)} with BGO rating >= {BGO_PREFILTER_RATING}")
 
     if not qualifying:
         print("  BGO: Nothing qualifies today.")

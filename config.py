@@ -18,6 +18,11 @@ GMAIL_APP_PASSWORD   = os.getenv('GMAIL_APP_PASSWORD', '') # Gmail App Password 
 # --- Monitoring ---
 CHECK_INTERVAL_MINUTES = int(os.getenv('CHECK_INTERVAL_MINUTES', '15'))
 
+# --- Deal Filtering ---
+# Minimum BGG community rating for a game to trigger a WhatsApp alert.
+# Applied uniformly across all deal sources (BGG Hot Deals, GameNerdz, TTM, BGO).
+BGG_MIN_RATING = float(os.getenv('BGG_MIN_RATING', '7.0'))
+
 # --- WhatsApp (Green API) ---
 GREEN_API_INSTANCE_ID = os.getenv('GREEN_API_INSTANCE_ID', '')
 GREEN_API_TOKEN       = os.getenv('GREEN_API_TOKEN', '')

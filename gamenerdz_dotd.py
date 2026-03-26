@@ -32,11 +32,9 @@ from bs4 import BeautifulSoup
 
 import schedule
 import config
-import bgg_api
+import enrichment
 import emailer
 import whatsapp_notifier
-import marketplace
-import price_checker
 from game_parser import extract_game_name
 
 
@@ -533,8 +531,12 @@ def _deep_find(obj, key: str, depth: int = 0):
 
 def research_dotd(dotd: Dict) -> Optional[Dict]:
     """
-    Run the full BGG research pipeline for a GameNerdz DotD item.
+    Run the unified BGG enrichment pipeline for a GameNerdz DotD item.
     Returns a deal dict ready for emailer.send_deal_alert(), or None.
+
+    Uses enrichment.enrich_game() — the same pipeline as all other sources.
+    Falls back to a thum.io screenshot if the game can't be found or fails
+    the rating threshold.
     """
     raw_name = dotd['name']
 
@@ -542,72 +544,18 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     game_name = extract_game_name(raw_name) or raw_name
     print(f"  Game name (cleaned): '{game_name}'")
 
-    # Step 1: BGG lookup
-    print(f"  Looking up '{game_name}' on BGG...")
-    bgg_id = bgg_api.search_game(game_name)
-    game_details = None
+    # Unified enrichment pipeline
+    enriched = enrichment.enrich_game(game_name, filter_by_rating=True, include_reviews=True)
 
-    if bgg_id:
-        print(f"  BGG ID: {bgg_id}")
-        time.sleep(1)
-        game_details = bgg_api.get_game_details(bgg_id)
-        if game_details:
-            print(f"  Details: '{game_details['name']}' | "
-                  f"Rating: {game_details['average_rating']} | "
-                  f"Weight: {game_details['weight']} | "
-                  f"Best at: {game_details['best_players']}p")
-    else:
-        print(f"  Not found on BGG. Will include with limited info.")
-
-    # Step 2: BGG Marketplace current listings (for sale, USA)
-    current_listings = []
-    if bgg_id:
-        print(f"  Fetching BGG marketplace current listings (USA)...")
-        time.sleep(1)
-        try:
-            current_listings = marketplace.get_current_listings(bgg_id, num_listings=5)
-            print(f"  Found {len(current_listings)} current listing(s)")
-        except Exception as e:
-            print(f"  Current listings error: {e}")
-
-    # Step 3: BGG Marketplace sold listings
-    sold_listings = []
-    if bgg_id:
-        print(f"  Fetching BGG marketplace sold listings (USA)...")
-        time.sleep(1)
-        sold_listings = marketplace.get_sold_listings(bgg_id, num_listings=5)
-        print(f"  Found {len(sold_listings)} sold listing(s)")
-
-    # Step 5: Retail prices from other stores
-    name_for_search = (game_details or {}).get('name', game_name)
-    print(f"  Checking retail prices for '{name_for_search}'...")
-    retail_prices = []
-    try:
-        retail_prices = price_checker.get_all_prices(name_for_search, bgg_id or '')
-        if retail_prices:
-            print(f"  Found {len(retail_prices)} price(s). "
-                  f"Cheapest: {retail_prices[0]['store']} @ {retail_prices[0]['price_str']}")
-        else:
-            print(f"  No retail prices found")
-    except Exception as e:
-        print(f"  Price check error: {e}")
-
-    # Step 6: BGG reviews
-    reviews = {'positive': [], 'negative': []}
-    if bgg_id:
-        print(f"  Fetching community reviews...")
-        time.sleep(1)
-        try:
-            reviews = bgg_api.get_game_reviews(bgg_id)
-            print(f"  Reviews: {len(reviews.get('positive', []))} positive, "
-                  f"{len(reviews.get('negative', []))} negative")
-        except Exception as e:
-            print(f"  Reviews error: {e}")
+    if enriched is None:
+        # Below threshold or not on BGG — screenshot fallback handled by
+        # check_gamenerdz_dotd() which already has thum.io / Playwright fallback.
+        return None
 
     # Build the thread-like dict so emailer can use the same template
     thread = {
-        'id':       '',           # no BGG thread ID for DotD
-        'deal_url': dotd['url'],  # actual GameNerdz product page
+        'id':       '',
+        'deal_url': dotd['url'],
         'subject':  f"GameNerdz Deal of the Day: {raw_name} — {dotd['price_str']}",
         'author':   'GameNerdz',
         'post_date': '',
@@ -615,11 +563,11 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
 
     return dict(
         thread            = thread,
-        game_details      = game_details,
-        current_listings  = current_listings,
-        sold_listings     = sold_listings,
-        retail_prices     = retail_prices,
-        reviews           = reviews,
+        game_details      = enriched['game_details'],
+        current_listings  = enriched['current_listings'],
+        sold_listings     = enriched['sold_listings'],
+        retail_prices     = enriched['retail_prices'],
+        reviews           = enriched['reviews'],
         dotd_price        = dotd['price_str'],
         dotd_url          = dotd['url'],
     )
@@ -695,7 +643,14 @@ def check_gamenerdz_dotd(force: bool = False, use_playwright: bool = True) -> No
 
     deal = research_dotd(dotd)
     if not deal:
-        print("  Research pipeline returned nothing. Skipping.")
+        print("  Research pipeline returned nothing (below threshold or not on BGG).")
+        # Send a screenshot so the user can still see the deal
+        enrichment.send_screenshot_fallback(
+            dotd.get('url', GAMENERDZ_DOTD_URL),
+            f"🏪 GameNerdz Deal of the Day: {dotd['name']} — {dotd['price_str']}\n"
+            f"⚠️ Below rating threshold or not on BGG.\n"
+            f"🔗 {dotd.get('url', GAMENERDZ_DOTD_URL)}",
+        )
         return
 
     print(f"\n  Sending GameNerdz DotD alert for '{dotd['name']}'...")
