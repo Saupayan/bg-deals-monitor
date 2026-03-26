@@ -371,24 +371,40 @@ def _format_deal_card(thread: dict, game_name: str,
     For single-game threads, a full card with retail/sold/verdict is built.
     current_listings: current (unsold) BGG Marketplace for-sale listings.
     Returns a list of strings (one per line).
+
+    Status emojis:
+      🟢  fresh   — title says live AND posted < 48 h ago
+      🟡  stale   — title says live BUT posted ≥ 48 h ago (likely expired)
+      🔴  dead    — title contains DEAD / expired / sold out marker
     """
     if current_listings is None:
         current_listings = []
-    active = is_active_deal(thread['subject'])
-    status = "🟢" if active else "🔴"
+    title_active = is_active_deal(thread['subject'])
 
     try:
         age_h = int((datetime.now(timezone.utc) - _parse_thread_date(thread['post_date']))
                     .total_seconds() / 3600)
         age_str = f"{age_h}h ago" if age_h < 48 else f"{age_h // 24}d ago"
     except Exception:
+        age_h = 0
         age_str = ""
+
+    # Determine status:
+    #   🔴 = explicitly marked dead/expired in title
+    #   🟡 = not marked dead but ≥ 48 h old (probably expired — deal pages change fast)
+    #   🟢 = not marked dead and fresh (< 48 h)
+    if not title_active:
+        status = "🔴"
+    elif age_h >= 48:
+        status = "🟡"
+    else:
+        status = "🟢"
 
     thread_url = (f"https://boardgamegeek.com/thread/{thread['id']}"
                   if thread.get('id') else '')
 
-    # ── Dead deal: compact one-liner ─────────────────────────────────────────
-    if not active:
+    # ── Dead deal (marked in title): compact one-liner ────────────────────────
+    if not title_active:
         lines = [f"{status} *{game_name}* ({age_str}) — expired"]
         if thread_url:
             lines.append(f"  {thread_url}")
@@ -397,7 +413,9 @@ def _format_deal_card(thread: dict, game_name: str,
     # ── Multi-game thread detection ───────────────────────────────────────────
     multi = extract_multi_game_deals(thread['subject'])
     if multi:
-        lines = [f"{status} *[{len(multi)} games in this post]* ({age_str})"]
+        stale_note = "  ⚠️ posted >48h ago — may be expired" if age_h >= 48 else ""
+        header = f"{status} *[{len(multi)} games in this post]* ({age_str})"
+        lines = [header + (f" — possibly stale" if age_h >= 48 else "")]
         for name, price in multi:
             price_str = f"${price:.2f}" if price is not None else "price?"
             lines.append(f"  • {name} — {price_str}")
@@ -405,9 +423,10 @@ def _format_deal_card(thread: dict, game_name: str,
             lines.append(f"  🔗 {thread_url}")
         return lines
 
-    # ── Single live deal: full card ───────────────────────────────────────────
+    # ── Single live/stale deal: full card ─────────────────────────────────────
     deal_price = extract_deal_price(thread['subject'])
-    lines = [f"{status} *{game_name}* ({age_str})"]
+    stale_suffix = " — possibly stale" if age_h >= 48 else ""
+    lines = [f"{status} *{game_name}* ({age_str}){stale_suffix}"]
 
     if deal_price is not None:
         lines.append(f"  💰 Deal price: ${deal_price:.2f}")
@@ -533,12 +552,12 @@ def run_force_mode() -> None:
 
         print(f"  Researching: '{game_name}'")
 
-        # Unified enrichment pipeline — force mode uses the lower 7.0 threshold
-        # (you asked for everything worth seeing; auto mode is stricter at 7.5).
+        # Force mode: fetch prices for ALL deals, no rating filter.
+        # (Rating filter is for auto/scheduled mode — when you manually ask for the
+        # full list you want to see prices regardless of BGG score.)
         enriched = enrichment.enrich_game(
             game_name,
-            filter_by_rating=True,
-            min_bgg_rating=config.BGG_MIN_RATING_FORCE,
+            filter_by_rating=False,  # show everything; auto mode does the filtering
             include_reviews=False,   # force mode is compact — no reviews needed
             num_listings=10,         # show more options for comparison
         )

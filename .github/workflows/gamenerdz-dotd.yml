@@ -37,6 +37,7 @@ jobs:
 
       - name: Run GameNerdz DotD checker
         env:
+          TZ: America/New_York
           BGG_API_TOKEN:          ${{ secrets.BGG_API_TOKEN }}
           ALERT_EMAIL:            ${{ secrets.ALERT_EMAIL }}
           GMAIL_USER:             ${{ secrets.GMAIL_USER }}
