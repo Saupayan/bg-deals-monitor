@@ -748,7 +748,9 @@ def run_heartbeat_mode() -> None:
         pass  # Heartbeat should never crash on GameNerdz errors
 
     lines.append("")
-    lines.append("_Next check in ~15 min_")
+    interval = config.CHECK_INTERVAL_MINUTES
+    interval_str = f"~{interval // 60} hr" if interval >= 60 else f"~{interval} min"
+    lines.append(f"_Next check in {interval_str}_")
 
     msg = "\n".join(lines)
     print(msg)
