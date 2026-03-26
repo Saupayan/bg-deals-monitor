@@ -163,12 +163,11 @@ def _research_deal(dotd: Dict) -> Optional[Dict]:
     game_name = dotd['clean_name']
     print(f"  TTM: Researching '{game_name}'...")
 
-    # filter_by_rating=False because TTM DotD is a curated daily deal —
-    # you always want to see it. A low-rating note is added to the message
-    # in check_ttm_dotd() so you can judge for yourself.
+    # filter_by_rating=True: only send an alert if the game clears the BGG
+    # rating threshold (config.BGG_MIN_RATING_AUTO, default 7.5).
     enriched = enrichment.enrich_game(
         game_name,
-        filter_by_rating=False,
+        filter_by_rating=True,
         include_reviews=True,
     )
     if enriched is None:

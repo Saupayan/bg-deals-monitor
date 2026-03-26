@@ -545,12 +545,11 @@ def research_dotd(dotd: Dict) -> Optional[Dict]:
     print(f"  Game name (cleaned): '{game_name}'")
 
     # Unified enrichment pipeline.
-    # filter_by_rating=False because GameNerdz DotD is a curated daily deal —
-    # you always want to see it regardless of BGG rating. The rating is shown
-    # in the message with a ⚠️ note so you can judge for yourself.
+    # filter_by_rating=True: only send an alert if the game clears the BGG
+    # rating threshold (config.BGG_MIN_RATING_AUTO, default 7.5).
     enriched = enrichment.enrich_game(
         game_name,
-        filter_by_rating=False,
+        filter_by_rating=True,
         include_reviews=True,
     )
 

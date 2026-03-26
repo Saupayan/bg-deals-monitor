@@ -126,6 +126,17 @@ def search_game(game_name: str) -> Optional[str]:
             if name_elem.get('value', '').lower().strip() == name_lower:
                 return item.get('id')
 
+    # Pass 1b: BGG name starts with the search term (min 4 chars to avoid false hits)
+    # Handles store names that omit the subtitle, e.g. GameNerdz lists the game as
+    # "Caesar!" but BGG's primary name is "Caesar!: Seize Rome in 20 Minutes!".
+    if len(name_lower) >= 4:
+        for item in items:
+            name_elem = item.find('name')
+            if name_elem is not None:
+                bgg_name = name_elem.get('value', '').lower().strip()
+                if bgg_name.startswith(name_lower):
+                    return item.get('id')
+
     # Pass 2: first item with a year published
     for item in items:
         if item.find('yearpublished') is not None:
