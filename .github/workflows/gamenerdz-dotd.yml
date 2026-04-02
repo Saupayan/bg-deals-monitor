@@ -33,7 +33,7 @@ jobs:
       # Playwright headless Chromium is required to render the JS-heavy DotD page.
       # --with-deps installs both the Chromium binary and required system libraries.
       - name: Install Playwright Chromium
-        run: playwright install chromium --with-deps
+        run: python -m playwright install chromium --with-deps
 
       - name: Run GameNerdz DotD checker
         env:
